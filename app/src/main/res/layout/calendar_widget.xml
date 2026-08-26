@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:orientation="vertical"
+    android:padding="16dp">
+    <!-- 第一行左侧是系统自动更新的时钟，右侧是系统天气入口状态。 -->
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal">
+        <TextClock android:id="@+id/widget_time" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:format12Hour="HH:mm" android:format24Hour="HH:mm" android:textColor="@color/ink" android:textSize="30sp" android:textStyle="bold" />
+        <TextView android:id="@+id/widget_weather" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="天气 · 打开系统天气" android:textColor="#687086" android:textSize="12sp" />
+    </LinearLayout>
+    <!-- 第二行显示当天日期和星期。 -->
+    <TextView android:id="@+id/widget_date" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:textColor="@color/accent" android:textSize="14sp" />
+    <!-- 剩余区域显示最接近的两条事项和倒计时。 -->
+    <TextView android:id="@+id/widget_next" android:layout_width="match_parent" android:layout_height="0dp" android:layout_marginTop="8dp" android:layout_weight="1" android:ellipsize="end" android:gravity="center_vertical" android:maxLines="3" android:textColor="@color/ink" android:textSize="15sp" />
+</LinearLayout>

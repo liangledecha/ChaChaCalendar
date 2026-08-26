@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- 蓝色圆角方形底板。 -->
+    <path android:fillColor="#526EF0" android:pathData="M18,10h72a8,8 0,0 1,8 8v72a8,8 0,0 1,-8 8h-72a8,8 0,0 1,-8 -8v-72a8,8 0,0 1,8 -8" />
+    <!-- 白色日历纸张。 -->
+    <path android:fillColor="#FFFFFF" android:pathData="M28,34h52v44h-52z" />
+    <!-- 蓝色日期方格。 -->
+    <path android:fillColor="#526EF0" android:pathData="M34,46h10v10h-10zM49,46h10v10h-10zM64,46h10v10h-10zM34,61h10v10h-10zM49,61h10v10h-10z" />
+    <!-- 日历顶部的两个白色装订环。 -->
+    <path android:fillColor="#FFFFFF" android:pathData="M34,18h8v20h-8zM66,18h8v20h-8z" />
+</vector>

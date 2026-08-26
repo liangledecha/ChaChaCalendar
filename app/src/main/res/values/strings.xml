@@ -1,0 +1,6 @@
+<resources>
+    <!-- 桌面图标和系统设置中显示的应用名称。 -->
+    <string name="app_name">茶茶日历</string>
+    <!-- 小组件选择器中的功能说明。 -->
+    <string name="widget_description">时钟、日期与即将到来的纪念日</string>
+</resources>

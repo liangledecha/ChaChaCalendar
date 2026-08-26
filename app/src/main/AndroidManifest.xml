@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 声明可能被自动探测的厂商天气应用，使安卓十一及以上允许查询这些包。 -->
+    <queries>
+        <package android:name="com.huawei.android.totemweather" />
+        <package android:name="com.sec.android.daemonapp" />
+        <package android:name="com.miui.weather2" />
+        <package android:name="com.coloros.weather2" />
+        <package android:name="com.oplus.weather" />
+        <package android:name="com.vivo.weather" />
+        <package android:name="com.google.android.googlequicksearchbox" />
+        <package android:name="com.meizu.flyme.weather" />
+    </queries>
+    <!-- 应用级配置：允许系统备份，使用自定义图标、名称和浅色主题。 -->
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_app"
+        android:label="@string/app_name"
+        android:roundIcon="@drawable/ic_app"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+        <!-- 主页面是桌面图标启动的入口。相对类名会自动拼接当前应用包名。 -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- 桌面小组件接收器，响应组件刷新、日期变化和时区变化。 -->
+        <receiver
+            android:name=".CalendarWidgetProvider"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="android.intent.action.DATE_CHANGED" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+            <!-- 指向小组件尺寸、布局和刷新策略配置。 -->
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/calendar_widget_info" />
+        </receiver>
+    </application>
+</manifest>

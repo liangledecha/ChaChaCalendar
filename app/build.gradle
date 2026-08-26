@@ -1,0 +1,38 @@
+// 启用安卓应用构建能力。
+plugins {
+    id 'com.android.application'
+}
+
+// 安卓应用的编译、安装和发布设置。
+android {
+    // 生成资源类和构建代码时使用的命名空间。
+    namespace 'com.liangledecha.chachacalendar'
+    // 使用安卓十五的接口进行编译。
+    compileSdk 35
+
+    // 所有构建类型共同使用的应用信息。
+    defaultConfig {
+        // 安装到手机中的唯一应用标识。修改后会被系统识别为一个新应用。
+        applicationId 'com.liangledecha.chachacalendar'
+        // 最低支持安卓八，目标适配安卓十五。
+        minSdk 26
+        targetSdk 35
+        // 内部版本号必须递增；展示版本号供用户识别。
+        versionCode 6
+        versionName '1.5.0'
+    }
+
+    // 发布版本启用代码和资源压缩，以减小安装包体积。
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    // 项目源代码和目标字节码统一使用十七版语法级别。
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

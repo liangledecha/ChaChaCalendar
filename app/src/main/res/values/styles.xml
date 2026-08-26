@@ -1,0 +1,11 @@
+<resources>
+    <!-- 全应用浅色无标题栏主题，页面自己绘制工具栏。 -->
+    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#526EF0</item>
+        <item name="android:navigationBarColor">#F7F8FC</item>
+        <item name="android:statusBarColor">#F7F8FC</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>
