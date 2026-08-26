@@ -7,7 +7,7 @@
     android:description="@string/widget_description"
     android:initialLayout="@layout/calendar_widget"
     android:minWidth="250dp"
-    android:minHeight="110dp"
+    android:minHeight="220dp"
     android:previewImage="@drawable/ic_app"
     android:resizeMode="horizontal|vertical"
     android:updatePeriodMillis="0"

@@ -3,6 +3,12 @@ plugins {
     id 'com.android.application'
 }
 
+// 使用离线中国民用农历库，避免安卓天文农历在临界朔日与系统民用历书相差一天。
+dependencies {
+    implementation 'cn.6tail:lunar:1.7.7'
+    testImplementation 'junit:junit:4.13.2'
+}
+
 // 安卓应用的编译、安装和发布设置。
 android {
     // 生成资源类和构建代码时使用的命名空间。
@@ -18,8 +24,8 @@ android {
         minSdk 26
         targetSdk 35
         // 内部版本号必须递增；展示版本号供用户识别。
-        versionCode 6
-        versionName '1.5.0'
+        versionCode 12
+        versionName '1.10.1'
     }
 
     // 发布版本启用代码和资源压缩，以减小安装包体积。

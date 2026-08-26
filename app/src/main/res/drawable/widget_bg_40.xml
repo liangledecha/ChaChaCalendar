@@ -1,0 +1,5 @@
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <!-- 透明六十个百分点的组件背景。 -->
+    <solid android:color="#66F4F5F8" />
+    <corners android:radius="24dp" />
+</shape>

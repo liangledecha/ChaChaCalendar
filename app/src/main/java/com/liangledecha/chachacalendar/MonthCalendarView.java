@@ -6,6 +6,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.View;
@@ -41,6 +42,8 @@ public final class MonthCalendarView extends View {
     private final RectF handleRect = new RectF();
     /** 日期到当日事项列表的映射，用于绘制蓝点和标签。 */
     private final Map<LocalDate, List<Event>> eventMap = new HashMap<>();
+    /** 日期到节日、放假补班或节气短标签的映射，由主页面按开关和缓存统一生成。 */
+    private final Map<LocalDate, String> culturalLabelMap = new HashMap<>();
     /** 从星期一开始的中文星期标题。 */
     private final String[] weekdays = {"一", "二", "三", "四", "五", "六", "日"};
     /** 当前展示的年月。 */
@@ -53,10 +56,16 @@ public final class MonthCalendarView extends View {
     private Mode renderedMode = Mode.MONTH;
     /** 是否在日期网格最左侧显示年周数。 */
     private boolean showWeekNumbers = true;
+    /** 是否在每个公历日号下方显示同一天的农历日号。 */
+    private boolean showLunarDates = true;
     /** 手指按下坐标，用于判断主要滑动方向。 */
     private float downY, downX;
     /** 月份横向动画锁，防止重复触发。 */
     private boolean periodAnimating;
+    /** 过长事项标签本轮动画开始时刻，所有可见标签共用以减少计时对象。 */
+    private long marqueeStart = SystemClock.uptimeMillis();
+    /** 本帧是否存在需要滚动的标签；用于只安排一次下一帧重绘。 */
+    private boolean marqueeNeeded;
     /** 主页面注册的回调监听器。 */
     private Listener listener;
 
@@ -71,6 +80,12 @@ public final class MonthCalendarView extends View {
     public void setListener(Listener l) { listener = l; }
     /** 修改周数显示开关并立即重绘。 */
     public void setShowWeekNumbers(boolean show) { showWeekNumbers = show; invalidate(); }
+    /** 修改农历显示开关并立即重绘，不改变任何事项自身使用的日期制。 */
+    public void setShowLunarDates(boolean show) { showLunarDates = show; invalidate(); }
+    /** 更换当前网格的节日、假日和节气标签。 */
+    public void setCulturalLabels(Map<LocalDate, String> labels) {
+        culturalLabelMap.clear(); if (labels != null) culturalLabelMap.putAll(labels); invalidate();
+    }
     /** 返回当前三态显示状态。 */
     public Mode getMode() { return mode; }
     /** 返回当前年月。 */
@@ -97,7 +112,7 @@ public final class MonthCalendarView extends View {
         eventMap.clear();
         LocalDate first = month.atDay(1), start = first.minusDays(first.getDayOfWeek().getValue() - 1L);
         for (int i = 0; i < 42; i++) { LocalDate d = start.plusDays(i); for (Event e : events) if (e.occursOn(d)) eventMap.computeIfAbsent(d, ignored -> new ArrayList<>()).add(e); }
-        invalidate();
+        marqueeStart = SystemClock.uptimeMillis(); invalidate();
     }
 
     /** 安全创建日期；目标月份没有原日号时自动使用该月最后一天。 */
@@ -156,15 +171,21 @@ public final class MonthCalendarView extends View {
             month = month.plusMonths(direction);
             selected = safeDate(month.getYear(), month.getMonthValue(), Math.min(selected.getDayOfMonth(), month.lengthOfMonth()));
             invalidate();
-            if (listener != null) listener.onPeriodChanged();
             setTranslationX(direction * getWidth() * .22f);
-            animate().translationX(0).alpha(1f).setDuration(220).setInterpolator(new DecelerateInterpolator()).withEndAction(() -> periodAnimating = false).start();
+            // 先让新月份顺畅滑入，再刷新数据库、农历和节假日数据。
+            // 旧实现把这些同步计算夹在滑出与滑入之间，主线程会短暂停住，表现为换月卡顿。
+            animate().translationX(0).alpha(1f).setDuration(220).setInterpolator(new DecelerateInterpolator()).withEndAction(() -> {
+                periodAnimating = false;
+                marqueeStart = SystemClock.uptimeMillis();
+                if (listener != null) listener.onPeriodChanged();
+            }).start();
         }).start();
     }
 
     /** 绘制星期标题、周数、日期格、事项提示和底部拖动柄。 */
     @Override protected void onDraw(Canvas c) {
         super.onDraw(c);
+        marqueeNeeded = false;
         float weekW = showWeekNumbers ? dp(30) : dp(8);
         float cellW = (getWidth() - weekW - dp(8)) / 7f;
         float headerH = dp(28);
@@ -193,6 +214,8 @@ public final class MonthCalendarView extends View {
         paint.setColor(Color.rgb(151, 157, 172));
         handleRect.set(getWidth()/2f-dp(24), getHeight()-dp(9), getWidth()/2f+dp(24), getHeight()-dp(5));
         c.drawRoundRect(handleRect, dp(3), dp(3), paint);
+        // 只有确实存在溢出文字且处于展开状态时才约每四十毫秒重绘，不启动后台常驻任务。
+        if (marqueeNeeded && mode == Mode.EXPANDED && renderedMode == Mode.EXPANDED && !periodAnimating && isShown()) postInvalidateDelayed(40);
     }
 
     /** 在指定行最左侧绘制年周数。 */
@@ -218,22 +241,57 @@ public final class MonthCalendarView extends View {
         }
         paint.setTextAlign(Paint.Align.CENTER); paint.setTextSize(sp(renderedMode == Mode.EXPANDED ? 17 : 18));
         paint.setColor(isSelected ? Color.WHITE : inMonth ? Color.rgb(30,36,51) : Color.rgb(175,180,191));
-        c.drawText(Integer.toString(date.getDayOfMonth()), cx, top + dp(29), paint);
+        c.drawText(Integer.toString(date.getDayOfMonth()), cx, top + dp(showLunarDates ? 23 : 29), paint);
+        String culturalLabel = culturalLabelMap.get(date);
+        boolean hasSubLine = showLunarDates || culturalLabel != null;
+        if (hasSubLine) {
+            // 节日、假日和节气优先占用副行；没有特殊标签时才显示普通农历日号。
+            paint.setTextSize(sp(8));
+            if (isSelected) paint.setColor(Color.rgb(232,236,255));
+            else if (culturalLabel != null && culturalLabel.startsWith("休·")) paint.setColor(Color.rgb(224,73,86));
+            else if (culturalLabel != null && culturalLabel.startsWith("班·")) paint.setColor(Color.rgb(224,139,52));
+            else if (culturalLabel != null) paint.setColor(Color.rgb(73,101,210));
+            else paint.setColor(inMonth ? Color.rgb(118,125,143) : Color.rgb(190,194,203));
+            c.drawText(culturalLabel == null ? LunarDateUtils.compact(date) : culturalLabel, cx, top + dp(37), paint);
+        }
 
         List<Event> events = eventMap.getOrDefault(date, Collections.emptyList());
         if (renderedMode == Mode.EXPANDED && !events.isEmpty()) {
             int max = Math.min(2, events.size());
             for (int i = 0; i < max; i++) {
-                float y = top + dp(39 + i * 18);
+                float y = top + dp((hasSubLine ? 43 : 39) + i * 18);
                 paint.setColor(events.get(i).type.equals("待办") ? Color.rgb(235,159,68) : Color.rgb(108,128,229));
                 c.drawRoundRect(new RectF(left + dp(3), y, left + width - dp(3), y + dp(15)), dp(4), dp(4), paint);
                 paint.setColor(Color.WHITE); paint.setTextSize(sp(8)); paint.setTextAlign(Paint.Align.LEFT);
-                String t = events.get(i).title.length() > 6 ? events.get(i).title.substring(0, 6) : events.get(i).title;
-                c.drawText(t, left + dp(6), y + dp(11), paint);
+                drawMarqueeLabel(c, events.get(i).title, left + dp(6), y, width - dp(12));
             }
-        } else if (!events.isEmpty() && !isSelected && !isToday) {
-            paint.setColor(Color.rgb(82,110,240)); c.drawCircle(cx, top + Math.min(height - dp(4), dp(51)), dp(2.2f), paint);
+        } else if (!events.isEmpty()) {
+            // 小蓝点放在选中圆或今天边框下方，避免与两种圆形状态重叠；圆形状态也保留日程提示。
+            paint.setColor(isSelected ? Color.rgb(82,110,240) : Color.rgb(82,110,240));
+            c.drawCircle(cx, top + Math.min(height - dp(4), dp(hasSubLine ? 51 : 47)), dp(2.2f), paint);
         }
+    }
+
+    /**
+     * 绘制可能溢出的事项名称：左对齐停一秒，随后匀速向左滚动到右边界对齐，
+     * 再停一秒后回到开头循环。未溢出的短名称保持静止，完全没有额外重绘。
+     */
+    private void drawMarqueeLabel(Canvas canvas, String text, float textLeft, float rowTop, float availableWidth) {
+        float textWidth = paint.measureText(text); float offset = 0;
+        // 只有第三种完全展开状态且当前没有换月动画时才启动滚动；其他状态始终静态左对齐。
+        if (textWidth > availableWidth && mode == Mode.EXPANDED && renderedMode == Mode.EXPANDED && !periodAnimating) {
+            marqueeNeeded = true;
+            float travel = textWidth - availableWidth;
+            long scrollDuration = Math.max(800L, Math.round(travel / dp(24) * 1000));
+            long cycle = 1000L + scrollDuration + 1000L;
+            long elapsed = (SystemClock.uptimeMillis() - marqueeStart) % cycle;
+            if (elapsed > 1000L && elapsed < 1000L + scrollDuration) offset = travel * (elapsed - 1000L) / scrollDuration;
+            else if (elapsed >= 1000L + scrollDuration) offset = travel;
+        }
+        int save = canvas.save();
+        canvas.clipRect(textLeft, rowTop, textLeft + availableWidth, rowTop + dp(15));
+        canvas.drawText(text, textLeft - offset, rowTop + dp(11), paint);
+        canvas.restoreToCount(save);
     }
 
     /** 区分横向换月、纵向三态切换、拖动柄点击和日期点击。 */

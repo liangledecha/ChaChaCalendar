@@ -5,14 +5,66 @@
     android:layout_height="match_parent"
     android:background="@drawable/widget_bg"
     android:orientation="vertical"
-    android:padding="16dp">
-    <!-- 第一行左侧是系统自动更新的时钟，右侧是系统天气入口状态。 -->
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal">
-        <TextClock android:id="@+id/widget_time" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:format12Hour="HH:mm" android:format24Hour="HH:mm" android:textColor="@color/ink" android:textSize="30sp" android:textStyle="bold" />
-        <TextView android:id="@+id/widget_weather" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="天气 · 打开系统天气" android:textColor="#687086" android:textSize="12sp" />
+    android:padding="14dp">
+
+    <!-- 顶栏同时显示自动更新的系统时钟、今天日期和手动刷新按钮。 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+        <TextClock
+            android:id="@+id/widget_time"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:format12Hour="HH:mm"
+            android:format24Hour="HH:mm"
+            android:textColor="@color/ink"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+        <TextView
+            android:id="@+id/widget_date"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
+            android:textColor="@color/accent"
+            android:textSize="13sp" />
+        <TextView
+            android:id="@+id/widget_refresh"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:gravity="center"
+            android:text="@string/widget_refresh"
+            android:textColor="@color/ink"
+            android:textSize="24sp" />
     </LinearLayout>
-    <!-- 第二行显示当天日期和星期。 -->
-    <TextView android:id="@+id/widget_date" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:textColor="@color/accent" android:textSize="14sp" />
-    <!-- 剩余区域显示最接近的两条事项和倒计时。 -->
-    <TextView android:id="@+id/widget_next" android:layout_width="match_parent" android:layout_height="0dp" android:layout_marginTop="8dp" android:layout_weight="1" android:ellipsize="end" android:gravity="center_vertical" android:maxLines="3" android:textColor="@color/ink" android:textSize="15sp" />
+
+    <!-- 天气仍然只提供手机系统天气入口，不引入新的联网来源。 -->
+    <TextView
+        android:id="@+id/widget_weather"
+        android:layout_width="match_parent"
+        android:layout_height="22dp"
+        android:gravity="center_vertical"
+        android:text="@string/widget_weather_default"
+        android:textColor="#687086"
+        android:textSize="11sp" />
+
+    <!-- 事项容器由代码按当前组件高度逐行加入内容，不使用权重，因此所有行从顶部紧凑排列。 -->
+    <LinearLayout
+        android:id="@+id/widget_event_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical" />
+
+    <!-- 没有符合显示规则的事项时，用单独空状态替代动态事项行。 -->
+    <TextView
+        android:id="@+id/widget_empty"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:text="@string/widget_empty"
+        android:textColor="#73798A"
+        android:textSize="14sp" />
 </LinearLayout>

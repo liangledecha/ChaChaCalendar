@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 只用于按年更新法定节假日安排；传统节日、农历和节气均离线计算。 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 读取可用日历账户并写入事件和提醒，让系统日历负责跨厂商通知。 -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <!-- 声明可能被自动探测的厂商天气应用，使安卓十一及以上允许查询这些包。 -->
     <queries>
         <package android:name="com.huawei.android.totemweather" />
