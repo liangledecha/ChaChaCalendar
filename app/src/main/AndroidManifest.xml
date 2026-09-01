@@ -47,5 +47,10 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/calendar_widget_info" />
         </receiver>
+        <!-- 为桌面小组件的可滚动事项列表提供远程行视图；只有安卓系统能够绑定。 -->
+        <service
+            android:name=".CalendarWidgetService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS" />
     </application>
 </manifest>

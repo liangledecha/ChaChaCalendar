@@ -123,7 +123,8 @@ public final class SystemCalendarSync {
         }
 
         // 系统日历的年度和月度规则按公历解释；农历事项只写入下一次真实落点并由日期变化广播滚动更新。
-        String recurrence = event.lunarBased && (Event.YEARLY.equals(event.repeatRule) || Event.MONTHLY.equals(event.repeatRule))
+        String recurrence = event.lunarBased && (Event.YEARLY.equals(event.repeatRule) || Event.MONTHLY.equals(event.repeatRule)
+                || Event.QUARTERLY.equals(event.repeatRule) || Event.HALF_YEARLY.equals(event.repeatRule))
                 ? null : recurrenceRule(event.repeatRule);
         if (recurrence == null) {
             long end;
@@ -149,6 +150,8 @@ public final class SystemCalendarSync {
         if (Event.DAILY.equals(repeatRule)) return "FREQ=DAILY";
         if (Event.WEEKLY.equals(repeatRule)) return "FREQ=WEEKLY";
         if (Event.MONTHLY.equals(repeatRule)) return "FREQ=MONTHLY";
+        if (Event.QUARTERLY.equals(repeatRule)) return "FREQ=MONTHLY;INTERVAL=3";
+        if (Event.HALF_YEARLY.equals(repeatRule)) return "FREQ=MONTHLY;INTERVAL=6";
         if (Event.YEARLY.equals(repeatRule)) return "FREQ=YEARLY";
         return null;
     }

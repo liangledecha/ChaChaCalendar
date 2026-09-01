@@ -15,7 +15,8 @@ import java.util.Locale;
  */
 public final class Event {
     // 重复规则在数据库中保存的固定值。使用常量可以避免各处手写字符串造成拼写错误。
-    public static final String NONE = "NONE", YEARLY = "YEARLY", MONTHLY = "MONTHLY", WEEKLY = "WEEKLY", DAILY = "DAILY";
+    public static final String NONE = "NONE", YEARLY = "YEARLY", HALF_YEARLY = "HALF_YEARLY",
+            QUARTERLY = "QUARTERLY", MONTHLY = "MONTHLY", WEEKLY = "WEEKLY", DAILY = "DAILY";
     /** 数据库主键；零表示尚未写入数据库的新事项。 */
     public long id;
     /** 用户输入的事项名称。 */
@@ -32,6 +33,8 @@ public final class Event {
     public LocalTime time;
     /** 待办是否已经完成；只有待办类型会使用此字段。 */
     public boolean completed;
+    /** 重复待办已经完成到哪一次；保留原始日期可避免每月重复日号逐月漂移。 */
+    public LocalDate completedThrough;
     /** 对应的系统日历事件编号；负数表示尚未同步或系统事件已被移除。 */
     public long systemEventId;
     /** 为真表示用户按农历创建事项；为假表示按公历创建。 */
@@ -65,26 +68,36 @@ public final class Event {
     /**
      * 计算从基准日期开始的下一次发生日期。
      *
-     * <p>计算顺序依次处理不重复、每日、每周、每月和每年。每月及每年重复时，
+     * <p>计算顺序依次处理不重复、每日、每周、每月、每季、每半年和每年。按月及按年重复时，
      * 如果目标月份不存在原始日号（例如二月没有三十一日），会自动使用该月最后一天。</p>
      *
      * @param anchor 用户当前选中的基准日期
-     * @return 不早于基准日期的下一次发生日期；不重复的历史事项仍返回原日期
+     * @return 普通事项返回不早于基准日期的下一次；未完成待办返回当前尚未办结的周期
      */
     public LocalDate nextDate(LocalDate anchor) {
+        // 重复待办必须停在当前未完成周期；只有勾选后才从刚完成日期的下一天寻找下一周期。
+        if (isTodo() && !NONE.equals(repeatRule)) {
+            return completedThrough == null ? date : nextDateIgnoringCompletion(completedThrough.plusDays(1));
+        }
+        return nextDateIgnoringCompletion(anchor);
+    }
+
+    /** 只按原始日期和重复规则计算发生日，供完成进度包装方法复用。 */
+    private LocalDate nextDateIgnoringCompletion(LocalDate anchor) {
         // 农历每年重复不能套用固定公历月日，必须为每个农历年重新换算。
         if (lunarBased && YEARLY.equals(repeatRule)) return nextLunarYearlyDate(anchor);
         if (lunarBased && MONTHLY.equals(repeatRule)) return nextLunarMonthlyDate(anchor);
+        if (lunarBased && QUARTERLY.equals(repeatRule)) return nextLunarPeriodicDate(anchor, 3);
+        if (lunarBased && HALF_YEARLY.equals(repeatRule)) return nextLunarPeriodicDate(anchor, 6);
         if (NONE.equals(repeatRule) || anchor.isBefore(date)) return date;
         if (DAILY.equals(repeatRule)) return anchor;
         if (WEEKLY.equals(repeatRule)) {
             long elapsed = ChronoUnit.DAYS.between(date, anchor), remainder = elapsed % 7;
             return remainder == 0 ? anchor : anchor.plusDays(7 - remainder);
         }
-        if (MONTHLY.equals(repeatRule)) {
-            YearMonth ym = YearMonth.from(anchor); LocalDate candidate = safe(ym, date.getDayOfMonth());
-            return candidate.isBefore(anchor) ? safe(ym.plusMonths(1), date.getDayOfMonth()) : candidate;
-        }
+        if (MONTHLY.equals(repeatRule)) return nextGregorianMonthlyPeriod(anchor, 1);
+        if (QUARTERLY.equals(repeatRule)) return nextGregorianMonthlyPeriod(anchor, 3);
+        if (HALF_YEARLY.equals(repeatRule)) return nextGregorianMonthlyPeriod(anchor, 6);
         LocalDate candidate = safe(YearMonth.of(anchor.getYear(), date.getMonthValue()), date.getDayOfMonth());
         return candidate.isBefore(anchor) ? safe(YearMonth.of(anchor.getYear() + 1, date.getMonthValue()), date.getDayOfMonth()) : candidate;
     }
@@ -94,6 +107,7 @@ public final class Event {
      * 该方法被月历绘制逻辑调用，用来决定是否绘制蓝点或文字标签。
      */
     public boolean occursOn(LocalDate target) {
+        if (isTodo() && !NONE.equals(repeatRule) && completedThrough != null && !target.isAfter(completedThrough)) return false;
         if (target.isBefore(date)) return false;
         if (NONE.equals(repeatRule)) return target.equals(date);
         if (lunarBased && YEARLY.equals(repeatRule)) return target.equals(nextLunarYearlyDate(target));
@@ -102,9 +116,17 @@ public final class Event {
             if (lunar.day == lunarDay) return true;
             return lunarDay == 30 && lunar.day == 29 && LunarDateUtils.fromSolar(target.plusDays(1)).day == 1;
         }
+        if (lunarBased && QUARTERLY.equals(repeatRule)) return target.equals(nextLunarPeriodicDate(target, 3));
+        if (lunarBased && HALF_YEARLY.equals(repeatRule)) return target.equals(nextLunarPeriodicDate(target, 6));
         if (DAILY.equals(repeatRule)) return true;
         if (WEEKLY.equals(repeatRule)) return ChronoUnit.DAYS.between(date, target) % 7 == 0;
         if (MONTHLY.equals(repeatRule)) return target.getDayOfMonth() == Math.min(date.getDayOfMonth(), YearMonth.from(target).lengthOfMonth());
+        if (QUARTERLY.equals(repeatRule) || HALF_YEARLY.equals(repeatRule)) {
+            long months = ChronoUnit.MONTHS.between(YearMonth.from(date), YearMonth.from(target));
+            int interval = QUARTERLY.equals(repeatRule) ? 3 : 6;
+            return months >= 0 && months % interval == 0
+                    && target.getDayOfMonth() == Math.min(date.getDayOfMonth(), YearMonth.from(target).lengthOfMonth());
+        }
         return target.getMonthValue() == date.getMonthValue() && target.getDayOfMonth() == Math.min(date.getDayOfMonth(), YearMonth.from(target).lengthOfMonth());
     }
 
@@ -138,7 +160,8 @@ public final class Event {
 
     /** 把数据库内部的重复规则转换为用户能看懂的中文。 */
     public String repeatLabel() {
-        if (YEARLY.equals(repeatRule)) return "每年"; if (MONTHLY.equals(repeatRule)) return "每月";
+        if (YEARLY.equals(repeatRule)) return "每年"; if (HALF_YEARLY.equals(repeatRule)) return "每半年";
+        if (QUARTERLY.equals(repeatRule)) return "每季"; if (MONTHLY.equals(repeatRule)) return "每月";
         if (WEEKLY.equals(repeatRule)) return "每周"; if (DAILY.equals(repeatRule)) return "每日"; return "不重复";
     }
     /** 把提前显示天数转换为事项卡片中的中文说明。 */
@@ -191,6 +214,40 @@ public final class Event {
             if (lunarDay == 30 && lunar.day == 29 && tomorrow.day == 1) return cursor;
         }
         return date;
+    }
+
+    /** 按原始公历日号寻找下一个每月、每季或每半年落点，小月自动使用月末。 */
+    private LocalDate nextGregorianMonthlyPeriod(LocalDate anchor, int intervalMonths) {
+        if (anchor.isBefore(date)) return date;
+        YearMonth base = YearMonth.from(date);
+        long elapsedMonths = Math.max(0, ChronoUnit.MONTHS.between(base, YearMonth.from(anchor)));
+        long periods = elapsedMonths / intervalMonths;
+        LocalDate candidate = safe(base.plusMonths(periods * intervalMonths), date.getDayOfMonth());
+        return candidate.isBefore(anchor) ? safe(base.plusMonths((periods + 1) * intervalMonths), date.getDayOfMonth()) : candidate;
+    }
+
+    /** 按真实农历月份顺序寻找每季或每半年落点，闰月会作为一个实际月份参与计数。 */
+    private LocalDate nextLunarPeriodicDate(LocalDate anchor, int intervalMonths) {
+        if (anchor.isBefore(date)) return date;
+        LunarDateUtils.LunarDate base = LunarDateUtils.fromSolar(date);
+        for (LocalDate cursor = anchor; !cursor.isAfter(anchor.plusDays(intervalMonths * 33L)); cursor = cursor.plusDays(1)) {
+            LunarDateUtils.LunarDate candidate = LunarDateUtils.fromSolar(cursor);
+            boolean matchingDay = candidate.day == lunarDay
+                    || lunarDay == 30 && candidate.day == 29 && LunarDateUtils.fromSolar(cursor.plusDays(1)).day == 1;
+            if (matchingDay && lunarMonthOrdinal(candidate) >= lunarMonthOrdinal(base)
+                    && (lunarMonthOrdinal(candidate) - lunarMonthOrdinal(base)) % intervalMonths == 0) return cursor;
+        }
+        return date;
+    }
+
+    /** 把农历年月转换为连续月份编号，供跨年及闰月周期取模。 */
+    private static int lunarMonthOrdinal(LunarDateUtils.LunarDate lunar) {
+        int ordinal = 0;
+        for (int year = 1900; year < lunar.year; year++) ordinal += LunarDateUtils.leapMonthOfYear(year) == 0 ? 12 : 13;
+        int leap = LunarDateUtils.leapMonthOfYear(lunar.year);
+        ordinal += lunar.month - 1;
+        if (leap > 0 && (lunar.month > leap || lunar.month == leap && lunar.leapMonth)) ordinal++;
+        return ordinal;
     }
 
     /** 在指定年月中安全创建日期，自动处理二月和小月没有二十九至三十一日的情况。 */

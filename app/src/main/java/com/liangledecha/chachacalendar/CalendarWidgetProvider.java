@@ -7,10 +7,10 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.graphics.Color;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.TypedValue;
-import android.view.View;
 import android.widget.RemoteViews;
 
 import java.time.LocalDate;
@@ -27,15 +27,11 @@ import java.util.Locale;
 public final class CalendarWidgetProvider extends AppWidgetProvider {
     /** 用户点击组件刷新按钮时发送的应用内广播动作。 */
     private static final String ACTION_REFRESH = "com.liangledecha.chachacalendar.REFRESH_WIDGET";
-    /** 小组件默认高度；桌面未返回尺寸时用它保证默认显示四条。 */
-    private static final int DEFAULT_HEIGHT_DP = 220;
     /** 两组五级字号。第一级保持旧版默认，第五级适合组件铺满整个桌面。 */
     private static final float[] TIME_SIZES = {24, 28, 32, 36, 40};
     private static final float[] DATE_SIZES = {13, 15, 17, 19, 21};
     private static final float[] WEATHER_SIZES = {11, 12, 13, 14, 15};
     private static final float[] EVENT_SIZES = {13, 15, 17, 19, 21};
-    /** 各事项字号对应的两行最小高度，既防止遮挡，也用于计算容纳数量。 */
-    private static final int[] EVENT_ROW_HEIGHTS_DP = {32, 38, 43, 48, 54};
     /** 系统要求刷新某一批小组件时，把工作统一交给完整刷新方法。 */
     @Override public void onUpdate(Context context, AppWidgetManager manager, int[] ids) { updateAll(context, manager, ids); }
 
@@ -79,8 +75,6 @@ public final class CalendarWidgetProvider extends AppWidgetProvider {
         if (ids == null) return;
         // 今天用于格式化日期，并作为显示规则和倒计时的计算基准。
         LocalDate today = LocalDate.now();
-        // 只读取今天符合提前显示规则的事项，避免组件显示过远内容。
-        List<Event> events = new EventStore(context).visible();
         // 使用中国地区格式生成“月、日、星期”文字。
         DateTimeFormatter dateFormat = DateTimeFormatter.ofPattern("M月d日 E", Locale.CHINA);
         SharedPreferences preferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE);
@@ -99,20 +93,25 @@ public final class CalendarWidgetProvider extends AppWidgetProvider {
             views.setTextViewTextSize(R.id.widget_time, TypedValue.COMPLEX_UNIT_SP, TIME_SIZES[headerLevel]);
             views.setTextViewTextSize(R.id.widget_date, TypedValue.COMPLEX_UNIT_SP, DATE_SIZES[headerLevel]);
             views.setTextViewTextSize(R.id.widget_weather, TypedValue.COMPLEX_UNIT_SP, WEATHER_SIZES[headerLevel]);
-            views.setViewVisibility(R.id.widget_empty, events.isEmpty() ? View.VISIBLE : View.GONE);
-            views.removeAllViews(R.id.widget_event_container);
-            int limit = itemLimit(manager.getAppWidgetOptions(id), headerLevel, eventLevel);
-            for (int index = 0; index < Math.min(limit, events.size()); index++) {
-                RemoteViews row = new RemoteViews(context.getPackageName(), R.layout.widget_event_row);
-                row.setTextViewText(R.id.widget_item_text, widgetText(events.get(index), today));
-                row.setTextColor(R.id.widget_item_text, events.get(index).isOverdue() ? Color.rgb(210,55,67) : Color.rgb(32,39,55));
-                row.setTextViewTextSize(R.id.widget_item_text, TypedValue.COMPLEX_UNIT_SP, EVENT_SIZES[eventLevel]);
-                row.setInt(R.id.widget_item_text, "setMinHeight", dp(context, EVENT_ROW_HEIGHTS_DP[eventLevel]));
-                views.addView(R.id.widget_event_container, row);
-            }
-            // 点击组件主体时打开主日历页面。
-            Intent openCalendar = new Intent(context, MainActivity.class);
-            views.setOnClickPendingIntent(R.id.widget_root, PendingIntent.getActivity(context, 1000 + id, openCalendar, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
+            // 系统列表服务按需提供全部事项；每个组件使用不同地址，避免桌面错误复用另一实例的数据。
+            Intent listService = new Intent(context, CalendarWidgetService.class)
+                    .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id);
+            listService.setData(Uri.parse(listService.toUri(Intent.URI_INTENT_SCHEME)));
+            views.setRemoteAdapter(R.id.widget_event_list, listService);
+            views.setEmptyView(R.id.widget_event_list, R.id.widget_empty);
+            // 任何可靠的组件刷新都会把列表恢复到第一条，防止刷新后仍停留在旧位置。
+            views.setScrollPosition(R.id.widget_event_list, 0);
+            // 事项行、无事项提示和其余空白区域统一打开应用的日程页；已打开应用时复用原页面。
+            Intent openAgenda = new Intent(context, MainActivity.class)
+                    .putExtra(MainActivity.EXTRA_OPEN_AGENDA, true)
+                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            // 安卓十二起集合点击模板必须明确允许系统合并行级填充意图；目标组件仍固定为本应用页面。
+            int templateFlags = PendingIntent.FLAG_UPDATE_CURRENT
+                    | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0);
+            PendingIntent openAgendaPending = PendingIntent.getActivity(context, 1000 + id, openAgenda, templateFlags);
+            views.setPendingIntentTemplate(R.id.widget_event_list, openAgendaPending);
+            views.setOnClickPendingIntent(R.id.widget_empty, openAgendaPending);
+            views.setOnClickPendingIntent(R.id.widget_root, openAgendaPending);
             // 刷新按钮只重新读取本地数据库，不启动网络请求或常驻后台任务。
             Intent refresh = new Intent(context, CalendarWidgetProvider.class).setAction(ACTION_REFRESH);
             views.setOnClickPendingIntent(R.id.widget_refresh, PendingIntent.getBroadcast(context, 2000 + id, refresh, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
@@ -124,12 +123,14 @@ public final class CalendarWidgetProvider extends AppWidgetProvider {
             } else {
                 views.setTextViewText(R.id.widget_weather, "天气 · 系统未开放");
             }
+            // 先让列表工厂重新读取数据，再提交带有“回到第一条”动作的完整远程视图。
+            manager.notifyAppWidgetViewDataChanged(id, R.id.widget_event_list);
             manager.updateAppWidget(id, views);
         }
     }
 
     /** 把一条事项压缩成小组件中的两行信息，待办会在类型后显示分钟精度时间。 */
-    private static String widgetText(Event event, LocalDate today) {
+    static String widgetText(Event event, LocalDate today) {
         LocalDate next = event.nextDate(today);
         long days = event.daysUntil(today);
         String time = event.timeLabel().isEmpty() ? "" : " · " + event.timeLabel();
@@ -139,21 +140,10 @@ public final class CalendarWidgetProvider extends AppWidgetProvider {
     }
 
     /** 把设置中一至五级转换为数组使用的零至四下标。 */
-    private static int levelIndex(int level) { return Math.max(0, Math.min(4, level - 1)); }
+    static int levelIndex(int level) { return Math.max(0, Math.min(4, level - 1)); }
 
-    /**
-     * 根据桌面报告的当前最小高度计算事项容量。默认尺寸固定四条，增加高度后逐行增加，
-     * 最多二十条以控制远程视图传输体积。
-     */
-    private static int itemLimit(Bundle options, int headerLevel, int eventLevel) {
-        int height = options == null ? DEFAULT_HEIGHT_DP : options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, DEFAULT_HEIGHT_DP);
-        int headerReserve = 88 + headerLevel * 7;
-        int calculated = (height - headerReserve) / EVENT_ROW_HEIGHTS_DP[eventLevel];
-        return Math.max(4, Math.min(20, calculated));
-    }
-
-    /** 把密度无关像素转换为当前设备实际像素，供远程视图的最小高度接口使用。 */
-    private static int dp(Context context, int value) { return Math.round(value * context.getResources().getDisplayMetrics().density); }
+    /** 返回设置级别对应的事项字号，让列表服务和组件顶部保持同一档设置。 */
+    static float eventTextSize(int level) { return EVENT_SIZES[levelIndex(level)]; }
 
     /** 按“法定假日、节气、普通节日”的优先顺序生成小组件顶部的今日标签。 */
     private static String specialDateLabel(Context context, SharedPreferences preferences, LocalDate today) {

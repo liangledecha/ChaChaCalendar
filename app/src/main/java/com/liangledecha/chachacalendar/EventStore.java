@@ -21,12 +21,12 @@ import java.util.List;
 public final class EventStore extends SQLiteOpenHelper {
     /** 数据库文件名；数据库保存在应用自己的私有目录中。 */
     private static final String DB = "chacha_calendar.db";
-    /** 创建数据库帮助对象；第四版加入每条事项独立的农历日期字段。 */
-    public EventStore(Context context) { super(context, DB, null, 4); }
+    /** 创建数据库帮助对象；第五版加入重复待办的本次完成进度。 */
+    public EventStore(Context context) { super(context, DB, null, 5); }
 
     /** 首次安装时建立日程表和全部字段。 */
     @Override public void onCreate(SQLiteDatabase db) {
-        db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,type TEXT NOT NULL,visibility_days INTEGER NOT NULL DEFAULT -1,yearly INTEGER NOT NULL DEFAULT 1,repeat_rule TEXT NOT NULL DEFAULT 'YEARLY',event_time TEXT,completed INTEGER NOT NULL DEFAULT 0,system_event_id INTEGER NOT NULL DEFAULT -1,date_system TEXT NOT NULL DEFAULT 'SOLAR',lunar_month INTEGER NOT NULL DEFAULT 0,lunar_day INTEGER NOT NULL DEFAULT 0,lunar_leap INTEGER NOT NULL DEFAULT 0)");
+        db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,type TEXT NOT NULL,visibility_days INTEGER NOT NULL DEFAULT -1,yearly INTEGER NOT NULL DEFAULT 1,repeat_rule TEXT NOT NULL DEFAULT 'YEARLY',event_time TEXT,completed INTEGER NOT NULL DEFAULT 0,completed_through TEXT,system_event_id INTEGER NOT NULL DEFAULT -1,date_system TEXT NOT NULL DEFAULT 'SOLAR',lunar_month INTEGER NOT NULL DEFAULT 0,lunar_day INTEGER NOT NULL DEFAULT 0,lunar_leap INTEGER NOT NULL DEFAULT 0)");
     }
     /**
      * 升级旧数据库。
@@ -51,6 +51,11 @@ public final class EventStore extends SQLiteOpenHelper {
             db.execSQL("ALTER TABLE events ADD COLUMN lunar_day INTEGER NOT NULL DEFAULT 0");
             db.execSQL("ALTER TABLE events ADD COLUMN lunar_leap INTEGER NOT NULL DEFAULT 0");
         }
+        if (oldVersion < 5) {
+            // 重复待办不再使用永久完成状态；升级后重新激活，并从下一次勾选开始记录周期进度。
+            db.execSQL("ALTER TABLE events ADD COLUMN completed_through TEXT");
+            db.execSQL("UPDATE events SET completed=0 WHERE type='待办' AND repeat_rule<>'NONE'");
+        }
     }
     /**
      * 新增或更新一条事项。
@@ -60,7 +65,9 @@ public final class EventStore extends SQLiteOpenHelper {
         ContentValues v = new ContentValues(); v.put("title", e.title); v.put("event_date", e.date.toString()); v.put("type", e.type);
         v.put("visibility_days", e.visibilityDays); v.put("yearly", Event.YEARLY.equals(e.repeatRule) ? 1 : 0); v.put("repeat_rule", e.repeatRule);
         if (e.time == null) v.putNull("event_time"); else v.put("event_time", e.time.toString());
-        v.put("completed", e.completed ? 1 : 0); v.put("system_event_id", e.systemEventId);
+        v.put("completed", e.completed ? 1 : 0);
+        if (e.completedThrough == null) v.putNull("completed_through"); else v.put("completed_through", e.completedThrough.toString());
+        v.put("system_event_id", e.systemEventId);
         v.put("date_system", e.lunarBased ? "LUNAR" : "SOLAR");
         v.put("lunar_month", e.lunarMonth); v.put("lunar_day", e.lunarDay); v.put("lunar_leap", e.lunarLeapMonth ? 1 : 0);
         if (e.id == 0) { e.id = getWritableDatabase().insertOrThrow("events", null, v); return e.id; }
@@ -69,6 +76,12 @@ public final class EventStore extends SQLiteOpenHelper {
     /** 只更新待办的完成状态，避免勾选时覆盖其他字段。 */
     public void setCompleted(long id, boolean completed) {
         ContentValues values = new ContentValues(); values.put("completed", completed ? 1 : 0);
+        getWritableDatabase().update("events", values, "id=?", new String[]{Long.toString(id)});
+    }
+    /** 记录重复待办刚完成的周期；空值表示尚未完成过任何一次。 */
+    public void setCompletedThrough(long id, LocalDate completedThrough) {
+        ContentValues values = new ContentValues();
+        if (completedThrough == null) values.putNull("completed_through"); else values.put("completed_through", completedThrough.toString());
         getWritableDatabase().update("events", values, "id=?", new String[]{Long.toString(id)});
     }
     /** 保存系统日历返回的事件编号，供后续编辑和删除定位同一条系统事项。 */
@@ -91,7 +104,7 @@ public final class EventStore extends SQLiteOpenHelper {
         try (Cursor c = getReadableDatabase().query("events", null, null, null, null, null, null)) {
             while (c.moveToNext()) {
                 String storedTime = c.getString(c.getColumnIndexOrThrow("event_time"));
-                out.add(new Event(
+                Event event = new Event(
                         c.getLong(c.getColumnIndexOrThrow("id")),
                         c.getString(c.getColumnIndexOrThrow("title")),
                         LocalDate.parse(c.getString(c.getColumnIndexOrThrow("event_date"))),
@@ -104,7 +117,10 @@ public final class EventStore extends SQLiteOpenHelper {
                         "LUNAR".equals(c.getString(c.getColumnIndexOrThrow("date_system"))),
                         c.getInt(c.getColumnIndexOrThrow("lunar_month")),
                         c.getInt(c.getColumnIndexOrThrow("lunar_day")),
-                        c.getInt(c.getColumnIndexOrThrow("lunar_leap")) == 1));
+                        c.getInt(c.getColumnIndexOrThrow("lunar_leap")) == 1);
+                String completedThrough = c.getString(c.getColumnIndexOrThrow("completed_through"));
+                event.completedThrough = completedThrough == null || completedThrough.isEmpty() ? null : LocalDate.parse(completedThrough);
+                out.add(event);
             }
         }
         out.sort(Comparator.comparing(e -> e.nextDateTime(anchor))); return out;

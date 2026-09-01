@@ -50,12 +50,15 @@
         android:textColor="#687086"
         android:textSize="11sp" />
 
-    <!-- 事项容器由代码按当前组件高度逐行加入内容，不使用权重，因此所有行从顶部紧凑排列。 -->
-    <LinearLayout
-        android:id="@+id/widget_event_container"
+    <!-- 系统原生列表按组件可用高度显示事项，内容超出后可直接上下滑动浏览。 -->
+    <ListView
+        android:id="@+id/widget_event_list"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical" />
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:divider="@android:color/transparent"
+        android:dividerHeight="0dp"
+        android:scrollbars="none" />
 
     <!-- 没有符合显示规则的事项时，用单独空状态替代动态事项行。 -->
     <TextView

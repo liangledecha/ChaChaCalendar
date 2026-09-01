@@ -1,5 +1,8 @@
 package com.liangledecha.chachacalendar;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ValueAnimator;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -9,6 +12,7 @@ import android.appwidget.AppWidgetManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.DialogInterface;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -19,6 +23,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
+import android.widget.AbsListView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -36,6 +41,7 @@ import android.widget.Toast;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.Period;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
@@ -54,6 +60,10 @@ import java.util.Set;
  * 接收用户操作后调用数据库、刷新列表，并把变更同步到桌面小组件。</p>
  */
 public final class MainActivity extends Activity {
+    /** 小组件通过此参数要求主页面直接打开“日程”页。 */
+    static final String EXTRA_OPEN_AGENDA = "打开日程页";
+    /** 小组件事项行通过此参数告诉主页面需要定位和查看的数据库编号。 */
+    static final String EXTRA_EVENT_ID = "事项编号";
     /** 主内容区当前页面类型。日程和待办共用事项列表，通过额外开关区分。 */
     private enum Section { YEAR, MONTH, AGENDA }
     /** 全应用主蓝色，供选中状态、圆形按钮和强调文字使用。 */
@@ -88,6 +98,14 @@ public final class MainActivity extends Activity {
     private final Set<Integer> holidayYearsLoading = new HashSet<>();
     /** 月历绘制使用的事项缓存；只在事项真正增删改时读取数据库，换月时直接复用。 */
     private List<Event> calendarEventCache = new ArrayList<>();
+    /** 当前正在显示的只读详情窗口，用于阻止小组件连续点击叠加多个相同窗口。 */
+    private AlertDialog detailsDialog;
+    /** 当前详情窗口对应的数据库编号；负数表示没有详情窗口。 */
+    private long detailsEventId = -1;
+    /** 正在执行的事项强调动画；用户滚动列表时立即取消，避免动画跟随复用行。 */
+    private ValueAnimator eventFlashAnimator;
+    /** 最近一次小组件点击等待定位的事项编号，用于丢弃尚未执行的旧点击任务。 */
+    private long pendingWidgetEventId = -1;
 
     /**
      * 页面创建入口。
@@ -107,7 +125,32 @@ public final class MainActivity extends Activity {
         });
         setContentView(content);
         refresh();
+        openRequestedSection(getIntent());
         requestCalendarPermissionIfNeeded();
+    }
+
+    /** 应用已经打开时接收小组件的新点击，并复用当前页面切换到日程页。 */
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        openRequestedSection(intent);
+    }
+
+    /** 识别小组件入口参数；普通桌面图标启动仍保持进入月历。 */
+    private void openRequestedSection(Intent intent) {
+        if (intent == null || !intent.getBooleanExtra(EXTRA_OPEN_AGENDA, false)) return;
+        todosOnly = false;
+        switchSection(Section.AGENDA);
+        updateTabStyles();
+        long eventId = intent.getLongExtra(EXTRA_EVENT_ID, -1);
+        if (eventId > 0) {
+            // 同一详情仍开着时只把应用带回前台，不在其后面重复排队闪烁和弹窗。
+            if (detailsDialog != null && detailsDialog.isShowing() && detailsEventId == eventId) return;
+            if (detailsDialog != null && detailsDialog.isShowing()) detailsDialog.dismiss();
+            pendingWidgetEventId = eventId;
+            if (eventFlashAnimator != null) eventFlashAnimator.cancel();
+            list.post(() -> revealWidgetEvent(eventId));
+        }
     }
 
     /** 从其他页面返回应用时，如果正停留在待办页，再检查一次已办结事项是否刚刚过期。 */
@@ -197,8 +240,16 @@ public final class MainActivity extends Activity {
         lowerPanel.addView(summary, new LinearLayout.LayoutParams(-1, dp(42)));
         list = new ListView(this); list.setDividerHeight(0); list.setSelector(android.R.color.transparent);
         adapter = new EventAdapter(this, new ArrayList<>(), this::toggleTodo); list.setAdapter(adapter);
-        list.setOnItemClickListener((p, v, pos, id) -> showEventDialog(adapter.getItem(pos)));
+        list.setOnItemClickListener((p, v, pos, id) -> showEventDetails(adapter.getItem(pos)));
         list.setOnItemLongClickListener((p, v, pos, id) -> { confirmDelete(adapter.getItem(pos)); return true; });
+        list.setOnScrollListener(new AbsListView.OnScrollListener() {
+            /** 用户开始拖动或惯性滚动时终止强调动画，防止被复用的其他事项行继续闪烁。 */
+            @Override public void onScrollStateChanged(AbsListView view, int state) {
+                if (state != SCROLL_STATE_IDLE && eventFlashAnimator != null) eventFlashAnimator.cancel();
+            }
+            /** 可见范围变化不需要额外工作，行编号校验由动画每一帧完成。 */
+            @Override public void onScroll(AbsListView view, int first, int visible, int total) { }
+        });
         lowerPanel.addView(list, new LinearLayout.LayoutParams(-1, 0, 1));
         page.addView(lowerPanel, new LinearLayout.LayoutParams(-1, 0, 1));
 
@@ -314,7 +365,7 @@ public final class MainActivity extends Activity {
     private void updateSummary() {
         LocalDate now = LocalDate.now();
         if (section == Section.AGENDA) {
-            summary.setText(todosOnly ? "待办  ·  点击修改，长按删除" : "全部日程  ·  按下一次发生日期排列");
+            summary.setText(todosOnly ? "待办  ·  点击查看，长按删除" : "全部日程  ·  点击查看，长按删除");
             return;
         }
         LocalDate selected = calendar == null ? now : calendar.getSelectedDate();
@@ -358,6 +409,19 @@ public final class MainActivity extends Activity {
      */
     private void toggleTodo(Event event, boolean completed) {
         if (!event.isTodo() || event.completed == completed) return;
+        // 重复待办的勾选只完成当前周期，保留原始重复锚点并立即显示下一次。
+        if (completed && !Event.NONE.equals(event.repeatRule)) {
+            LocalDate completedOccurrence = event.nextDate(LocalDate.now());
+            event.completedThrough = completedOccurrence;
+            event.completed = false;
+            store.setCompletedThrough(event.id, completedOccurrence);
+            store.setCompleted(event.id, false);
+            prefs.edit().remove(expiredPromptKey(event.id)).apply();
+            syncOneToSystem(event, false);
+            refresh();
+            Toast.makeText(this, "本次已完成，下一次：" + event.displayDate(event.nextDate(LocalDate.now())), Toast.LENGTH_SHORT).show();
+            return;
+        }
         boolean overdueBeforeCompletion = event.isOverdue();
         event.completed = completed;
         store.setCompleted(event.id, completed);
@@ -428,6 +492,105 @@ public final class MainActivity extends Activity {
     }
 
     /**
+     * 从小组件进入后，在日程列表中寻找对应数据库编号，平滑移动到该行并闪烁两次。
+     * 闪烁结束后打开同一条事项的只读详情；事项已被删除时安全结束，不显示错误页面。
+     */
+    private void revealWidgetEvent(long eventId) {
+        if (pendingWidgetEventId != eventId) return;
+        int position = -1;
+        Event target = null;
+        for (int index = 0; index < adapter.getCount(); index++) {
+            Event candidate = adapter.getItem(index);
+            if (candidate != null && candidate.id == eventId) { position = index; target = candidate; break; }
+        }
+        if (position < 0 || target == null) {
+            // 事项可能已被删除；清除等待状态，避免影响下一次小组件点击。
+            if (pendingWidgetEventId == eventId) pendingWidgetEventId = -1;
+            return;
+        }
+        final int targetPosition = position;
+        final Event targetEvent = target;
+        list.smoothScrollToPositionFromTop(targetPosition, dp(8), 350);
+        list.postDelayed(() -> flashEventRow(targetPosition, targetEvent), 420);
+    }
+
+    /** 让已定位的列表行产生两次明暗变化，然后展示其详情。 */
+    private void flashEventRow(int position, Event event) {
+        if (pendingWidgetEventId != event.id) return;
+        int childIndex = position - list.getFirstVisiblePosition();
+        View row = childIndex >= 0 && childIndex < list.getChildCount() ? list.getChildAt(childIndex) : null;
+        if (row == null) {
+            // 极端情况下目标行尚未完成布局，直接展示正确事项并结束定位状态。
+            if (pendingWidgetEventId == event.id) pendingWidgetEventId = -1;
+            showEventDetails(event);
+            return;
+        }
+        LinearLayout rowLayout = (LinearLayout) row;
+        // 在白色与应用蓝色之间往返两次；蓝色阶段把文字变白，形成明显的近似反色效果。
+        ValueAnimator flash = ValueAnimator.ofArgb(Color.WHITE, accent, Color.WHITE, accent, Color.WHITE);
+        eventFlashAnimator = flash;
+        flash.setDuration(1100);
+        flash.addUpdateListener(animation -> {
+            // ListView 会复用离屏行；编号变化说明该视图已显示其他事项，必须立即停止。
+            if (!(rowLayout.getTag() instanceof Long) || (Long) rowLayout.getTag() != event.id) {
+                animation.cancel(); return;
+            }
+            int color = (int) animation.getAnimatedValue();
+            if (row.getBackground() instanceof GradientDrawable) ((GradientDrawable) row.getBackground()).setColor(color);
+            boolean bluePhase = Color.red(color) < 180;
+            ((TextView) rowLayout.getChildAt(1)).setTextColor(bluePhase ? Color.WHITE : Color.rgb(25,28,35));
+            ((TextView) rowLayout.getChildAt(2)).setTextColor(bluePhase ? Color.WHITE : Color.rgb(73,91,174));
+        });
+        flash.addListener(new AnimatorListenerAdapter() {
+            @Override public void onAnimationEnd(Animator animation) {
+                if (eventFlashAnimator == animation) eventFlashAnimator = null;
+                adapter.notifyDataSetChanged();
+                if (pendingWidgetEventId == event.id) {
+                    pendingWidgetEventId = -1;
+                    showEventDetails(event);
+                }
+            }
+        });
+        flash.start();
+    }
+
+    /** 显示事项的只读信息；只有点击“编辑”后才进入原有编辑表单。 */
+    private void showEventDetails(Event event) {
+        if (event == null) return;
+        if (detailsDialog != null && detailsDialog.isShowing()) {
+            if (detailsEventId == event.id) return;
+            detailsDialog.dismiss();
+        }
+        LocalDate today = LocalDate.now();
+        LocalDate next = event.nextDate(today);
+        long days = event.daysUntil(today);
+        String countdown = event.isOverdue() ? "已过期" : days == 0 ? "今天" : days > 0 ? days + "天后" : "已过" + (-days) + "天";
+        StringBuilder details = new StringBuilder()
+                .append("类型：").append(event.type)
+                .append("\n日期类型：").append(event.lunarBased ? "农历" : "公历")
+                .append("\n设定日期：").append(event.displayDate(event.date));
+        if (event.lunarBased) details.append("（公历").append(formatDate(event.date)).append("）");
+        if (!event.timeLabel().isEmpty()) details.append("\n时间：").append(event.timeLabel());
+        details.append("\n重复：").append(event.repeatLabel())
+                .append("\n显示规则：").append(event.visibilityLabel())
+                .append("\n下次发生：").append(event.displayDate(next)).append(" · ").append(countdown);
+        if (Event.YEARLY.equals(event.repeatRule) || "纪念日".equals(event.type) || "生日".equals(event.type)) {
+            int anniversaries = event.date.isAfter(today) ? 0 : Math.max(0, Period.between(event.date, today).getYears());
+            details.append("\n周年提醒：已满").append(anniversaries).append("周年");
+        }
+        if (event.isTodo()) details.append("\n状态：").append(event.completed ? "已办结" : event.isOverdue() ? "未办结 · 已过期" : "未办结");
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle(event.title).setMessage(details.toString())
+                .setNegativeButton("关闭", null)
+                .setPositiveButton("编辑", (ignored, which) -> showEventDialog(event)).create();
+        detailsDialog = dialog;
+        detailsEventId = event.id;
+        dialog.setOnDismissListener(ignored -> {
+            if (detailsDialog == dialog) { detailsDialog = null; detailsEventId = -1; }
+        });
+        dialog.show();
+    }
+
+    /**
      * 打开新增或编辑事项对话框。
      * 参数为空表示新增；不为空时把原事项内容填入表单，并在保存时更新同一主键。
      */
@@ -481,8 +644,8 @@ public final class MainActivity extends Activity {
         if (original != null) for (int i=0;i<visibilityValues.length;i++) if (visibilityValues[i] == original.visibilityDays) visibility.setSelection(i);
         box.addView(labeled("下半区显示规则", visibility));
         // 中文重复名称与内部固定值按相同下标一一对应。
-        String[] repeatNames = {"每年", "每月", "每周", "每日", "不重复"};
-        String[] repeatValues = {Event.YEARLY, Event.MONTHLY, Event.WEEKLY, Event.DAILY, Event.NONE};
+        String[] repeatNames = {"每年", "每半年", "每季", "每月", "每周", "每日", "不重复"};
+        String[] repeatValues = {Event.YEARLY, Event.HALF_YEARLY, Event.QUARTERLY, Event.MONTHLY, Event.WEEKLY, Event.DAILY, Event.NONE};
         Spinner repeat = spinner(repeatNames);
         if (original != null) for (int i=0;i<repeatValues.length;i++) if (repeatValues[i].equals(original.repeatRule)) repeat.setSelection(i);
         box.addView(labeled("重复", repeat));
@@ -490,7 +653,7 @@ public final class MainActivity extends Activity {
         type.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 timeRow.setVisibility(position == 2 ? View.VISIBLE : View.GONE);
-                if (original == null) repeat.setSelection(position <= 1 ? 0 : 4);
+                if (original == null) repeat.setSelection(position <= 1 ? 0 : repeatValues.length - 1);
             }
             @Override public void onNothingSelected(AdapterView<?> parent) { }
         });
@@ -519,6 +682,11 @@ public final class MainActivity extends Activity {
                     original == null ? -1 : original.systemEventId,
                     dateSystem.getSelectedItemPosition() == 1,
                     chosenLunar[0].month, chosenLunar[0].day, chosenLunar[0].leapMonth);
+            // 只在重复锚点和规则未改变时保留已完成周期，修改计划本身则从新计划重新开始。
+            if (original != null && "待办".equals(selectedType) && !Event.NONE.equals(saved.repeatRule)
+                    && original.isTodo() && original.repeatRule.equals(saved.repeatRule) && original.date.equals(saved.date)) {
+                saved.completedThrough = original.completedThrough;
+            }
             store.save(saved);
             prefs.edit().remove(expiredPromptKey(saved.id)).apply();
             syncOneToSystem(saved, true);
@@ -826,6 +994,8 @@ public final class MainActivity extends Activity {
         @Override public View getView(int position, View convert, ViewGroup parent) {
             LinearLayout row = convert instanceof LinearLayout ? (LinearLayout) convert : createRow();
             Event e = getItem(position); LocalDate next = e.nextDate(anchor); long days = e.daysUntil(anchor);
+            // 动画用数据库编号确认当前视图是否仍代表原事项，避免滚动复用后闪到其他行。
+            row.setTag(e.id);
             CheckBox completed = (CheckBox) row.getChildAt(0);
             TextView title = (TextView) row.getChildAt(1); TextView countdown = (TextView) row.getChildAt(2);
             completed.setOnCheckedChangeListener(null);
@@ -851,7 +1021,7 @@ public final class MainActivity extends Activity {
             GradientDrawable bg = new GradientDrawable(); bg.setColor(Color.WHITE); bg.setCornerRadius(dp(16)); bg.setStroke(dp(1), Color.rgb(233,235,242)); row.setBackground(bg);
             LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, dp(82)); rp.setMargins(0, dp(4), 0, dp(4)); row.setLayoutParams(rp);
             CheckBox box = new CheckBox(activity); box.setButtonTintList(android.content.res.ColorStateList.valueOf(Color.rgb(82,110,240)));
-            // 不抢占列表行焦点：点选择框正常勾选，点行内其他位置仍触发编辑，长按仍触发删除。
+            // 不抢占列表行焦点：点选择框正常勾选，点行内其他位置查看详情，长按仍触发删除。
             box.setFocusable(false); box.setFocusableInTouchMode(false); box.setClickable(true);
             row.addView(box, new LinearLayout.LayoutParams(dp(42), -1));
             TextView t = new TextView(activity); t.setTextSize(16); t.setTextColor(Color.rgb(25,28,35)); t.setTypeface(Typeface.DEFAULT, Typeface.BOLD); t.setGravity(Gravity.CENTER_VERTICAL); t.setLineSpacing(0,1.15f);
