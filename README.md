@@ -6,4 +6,4 @@
 
 应用包名：`com.liangledecha.chachacalendar`
 
-源码使用 Android SDK 35 和 JDK 17 构建；第三方许可说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+源码目录包含应用 Java 源码、Android 资源、Manifest 和测试代码。
