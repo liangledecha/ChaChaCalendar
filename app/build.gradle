@@ -24,8 +24,8 @@ android {
         minSdk 26
         targetSdk 35
         // 内部版本号必须递增；展示版本号供用户识别。
-        versionCode 12
-        versionName '1.10.1'
+        versionCode 19
+        versionName '1.10.7'
     }
 
     // 发布版本启用代码和资源压缩，以减小安装包体积。

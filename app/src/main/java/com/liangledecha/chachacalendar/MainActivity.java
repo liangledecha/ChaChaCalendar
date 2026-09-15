@@ -18,6 +18,7 @@ import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.TextUtils;
 import android.util.TypedValue;
@@ -113,6 +114,16 @@ public final class MainActivity extends Activity {
     private ValueAnimator eventFlashAnimator;
     /** 最近一次小组件点击等待定位的事项编号，用于丢弃尚未执行的旧点击任务。 */
     private long pendingWidgetEventId = -1;
+    /** 当前新建或编辑窗口；更新提示必须等它关闭，避免两个窗口叠在一起。 */
+    private AlertDialog eventFormDialog;
+    /** 当前“关于”窗口；异步得到最新版后直接更新这里的文字。 */
+    private AlertDialog aboutDialog;
+    /** 当前版本更新提示；同一时刻只允许显示一个。 */
+    private AlertDialog updateDialog;
+    /** 已发现但因其他窗口占用而暂缓显示的新版本。 */
+    private GitHubReleaseChecker.Release pendingRelease;
+    /** 防止快速切换前后台时并发发出相同版本请求。 */
+    private boolean checkingRelease;
 
     /**
      * 页面创建入口。
@@ -142,6 +153,12 @@ public final class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         openRequestedSection(intent);
+    }
+
+    /** 每次应用从后台进入前台时异步检查一次正式版更新。 */
+    @Override protected void onStart() {
+        super.onStart();
+        checkForUpdates(false, null);
     }
 
     /** 识别小组件入口参数；普通桌面图标启动仍保持进入月历。 */
@@ -607,6 +624,7 @@ public final class MainActivity extends Activity {
         detailsEventId = event.id;
         dialog.setOnDismissListener(ignored -> {
             if (detailsDialog == dialog) { detailsDialog = null; detailsEventId = -1; }
+            showPendingUpdateIfPossible();
         });
         dialog.show();
     }
@@ -691,6 +709,11 @@ public final class MainActivity extends Activity {
         // 先创建对话框，再在显示后接管保存按钮，以便校验失败时保持窗口不关闭。
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle(original == null ? "新建日程" : "编辑日程").setView(box)
                 .setNegativeButton("取消", null).setPositiveButton("保存", null).create();
+        eventFormDialog = dialog;
+        dialog.setOnDismissListener(ignored -> {
+            if (eventFormDialog == dialog) eventFormDialog = null;
+            showPendingUpdateIfPossible();
+        });
         dialog.setOnShowListener(ignored -> dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> {
             String name = title.getText().toString().trim();
             if (name.isEmpty()) { title.setError("请输入名称"); return; }
@@ -728,14 +751,15 @@ public final class MainActivity extends Activity {
                 }).show();
     }
 
-    /** 在三点按钮旁显示翻页、周数设置和天气说明菜单。 */
+    /** 在三点按钮旁显示翻页、设置、同步、天气来源和关于菜单。 */
     private void showMenu(View anchor) {
         PopupMenu popup = new PopupMenu(this, anchor);
         if (section != Section.AGENDA) {
             popup.getMenu().add(section == Section.YEAR ? "上一年" : "上一月");
             popup.getMenu().add(section == Section.YEAR ? "下一年" : "下一月");
         }
-        popup.getMenu().add("显示设置"); popup.getMenu().add("系统日历同步"); popup.getMenu().add("关于天气来源");
+        popup.getMenu().add("显示设置"); popup.getMenu().add("系统日历同步");
+        popup.getMenu().add("关于天气来源"); popup.getMenu().add("关于");
         popup.setOnMenuItemClickListener(item -> {
             String s = item.getTitle().toString();
             if (s.equals("上一月")) calendar.previousMonth();
@@ -744,9 +768,86 @@ public final class MainActivity extends Activity {
             else if (s.equals("下一年")) yearCalendar.setYear(yearCalendar.getYear()+1);
             else if (s.equals("显示设置")) showSettings();
             else if (s.equals("系统日历同步")) showCalendarSyncInfo();
-            else showWeatherInfo();
+            else if (s.equals("关于天气来源")) showWeatherInfo();
+            else if (s.equals("关于")) showAbout();
             updateTitle(); return true;
         }); popup.show();
+    }
+
+    /** 显示已安装版本、GitHub 项目地址和联网取得的最新正式版本。 */
+    private void showAbout() {
+        LinearLayout content = new LinearLayout(this); content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(24), dp(8), dp(24), 0);
+        content.addView(text("茶茶日历", 21, Color.rgb(25,28,35), true), new LinearLayout.LayoutParams(-1, dp(42)));
+        content.addView(text("已安装版本：" + installedVersion(), 15, Color.rgb(50,56,68), false), new LinearLayout.LayoutParams(-1, dp(36)));
+        GitHubReleaseChecker.Release cached = GitHubReleaseChecker.cached(this);
+        TextView latest = text("最新版本：" + (cached == null ? "正在检测…" : cached.version), 15, Color.rgb(50,56,68), false);
+        content.addView(latest, new LinearLayout.LayoutParams(-1, dp(36)));
+        TextView address = text(GitHubReleaseChecker.PROJECT_URL, 13, accent, false); address.setSingleLine(false);
+        address.setOnClickListener(v -> openUrl(GitHubReleaseChecker.PROJECT_URL));
+        content.addView(address, new LinearLayout.LayoutParams(-1, dp(58)));
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("关于").setView(content)
+                .setNegativeButton("关闭", null).setNeutralButton("检查更新", null)
+                .setPositiveButton("打开 GitHub", (ignored, which) -> openUrl(GitHubReleaseChecker.PROJECT_URL)).create();
+        aboutDialog = dialog;
+        dialog.setOnShowListener(ignored -> dialog.getButton(DialogInterface.BUTTON_NEUTRAL)
+                .setOnClickListener(v -> checkForUpdates(true, latest)));
+        dialog.setOnDismissListener(ignored -> {
+            if (aboutDialog == dialog) aboutDialog = null;
+            showPendingUpdateIfPossible();
+        });
+        dialog.show();
+        checkForUpdates(false, latest);
+    }
+
+    /** 请求最新版本；自动检查尊重“跳过此版本”，手动检查仍会报告该版本。 */
+    private void checkForUpdates(boolean manual, TextView latestLabel) {
+        if (checkingRelease) return;
+        checkingRelease = true;
+        if (latestLabel != null) latestLabel.setText("最新版本：正在检测…");
+        GitHubReleaseChecker.check(this, (release, error) -> {
+            checkingRelease = false;
+            if (latestLabel != null) latestLabel.setText(release == null ? "最新版本：检测失败" :
+                    "最新版本：" + release.version + (error == null ? "" : "（缓存）"));
+            if (release == null) {
+                if (manual) Toast.makeText(this, "暂时无法连接 GitHub，请稍后重试", Toast.LENGTH_LONG).show();
+                return;
+            }
+            boolean newer = GitHubReleaseChecker.isNewer(release.version, installedVersion());
+            String skipped = prefs.getString("skipped_release_tag", "");
+            if (newer && (manual || !release.tag.equals(skipped))) {
+                pendingRelease = release; showPendingUpdateIfPossible();
+            } else if (manual) Toast.makeText(this, newer ? "此版本已被跳过，可在下一个版本发布时收到提示" : "当前已是最新版本", Toast.LENGTH_SHORT).show();
+        });
+    }
+
+    /** 仅在其他业务窗口都关闭后显示更新提示，避免启动入口产生窗口叠加。 */
+    private void showPendingUpdateIfPossible() {
+        if (pendingRelease == null || isFinishing() || updateDialog != null && updateDialog.isShowing()
+                || detailsDialog != null && detailsDialog.isShowing()
+                || eventFormDialog != null && eventFormDialog.isShowing()
+                || aboutDialog != null && aboutDialog.isShowing()) return;
+        GitHubReleaseChecker.Release release = pendingRelease; pendingRelease = null;
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("发现新版本 " + release.version)
+                .setMessage("当前版本：" + installedVersion() + "\n最新版本：" + release.version)
+                .setNegativeButton("取消", null)
+                .setNeutralButton("跳过此版本", (ignored, which) -> prefs.edit().putString("skipped_release_tag", release.tag).apply())
+                .setPositiveButton("更新", (ignored, which) -> openUrl(release.apkUrl.isEmpty() ? release.pageUrl : release.apkUrl)).create();
+        updateDialog = dialog;
+        dialog.setOnDismissListener(ignored -> { if (updateDialog == dialog) updateDialog = null; });
+        dialog.show();
+    }
+
+    /** 交给手机浏览器打开项目页或安装包下载地址。 */
+    private void openUrl(String url) {
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
+        catch (Exception error) { Toast.makeText(this, "没有找到可打开链接的应用", Toast.LENGTH_LONG).show(); }
+    }
+
+    /** 从系统实际安装包读取展示版本号；异常时返回未知，不显示内部版本号。 */
+    private String installedVersion() {
+        try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
+        catch (PackageManager.NameNotFoundException error) { return "未知"; }
     }
 
     /** 显示周数、农历、小组件背景和字号设置，并把结果持久化。 */
