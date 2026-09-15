@@ -15,6 +15,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.time.Duration;
 
 /**
  * 茶茶日历与安卓系统日历提供程序之间的同步桥梁。
@@ -108,11 +109,14 @@ public final class SystemCalendarSync {
         values.put(CalendarContract.Events.HAS_ALARM, 1);
 
         LocalDate occurrenceDate = event.nextDate(LocalDate.now());
-        boolean timedTodo = event.isTodo() && event.time != null;
-        if (timedTodo) {
+        boolean timedEvent = event.supportsTime() && event.time != null;
+        LocalDateTime timedStart = event.plannedStart != null ? event.ganttStart(occurrenceDate)
+                : LocalDateTime.of(occurrenceDate, event.time == null ? LocalTime.MIDNIGHT : event.time);
+        LocalDateTime timedEnd = event.plannedEnd != null ? event.ganttEnd(occurrenceDate) : timedStart.plusMinutes(30);
+        if (!timedEnd.isAfter(timedStart)) timedEnd = timedStart.plusMinutes(30);
+        if (timedEvent) {
             ZoneId zone = ZoneId.systemDefault();
-            LocalDateTime start = LocalDateTime.of(occurrenceDate, event.time);
-            values.put(CalendarContract.Events.DTSTART, start.atZone(zone).toInstant().toEpochMilli());
+            values.put(CalendarContract.Events.DTSTART, timedStart.atZone(zone).toInstant().toEpochMilli());
             values.put(CalendarContract.Events.EVENT_TIMEZONE, zone.getId());
             values.put(CalendarContract.Events.ALL_DAY, 0);
         } else {
@@ -128,9 +132,8 @@ public final class SystemCalendarSync {
                 ? null : recurrenceRule(event.repeatRule);
         if (recurrence == null) {
             long end;
-            if (timedTodo) {
-                LocalDateTime start = LocalDateTime.of(occurrenceDate, event.time == null ? LocalTime.MIDNIGHT : event.time);
-                end = start.plusMinutes(30).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+            if (timedEvent) {
+                end = timedEnd.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
             } else {
                 end = occurrenceDate.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli();
             }
@@ -139,7 +142,7 @@ public final class SystemCalendarSync {
             values.putNull(CalendarContract.Events.RRULE);
         } else {
             values.put(CalendarContract.Events.RRULE, recurrence);
-            values.put(CalendarContract.Events.DURATION, timedTodo ? "PT30M" : "P1D");
+            values.put(CalendarContract.Events.DURATION, timedEvent ? Duration.between(timedStart, timedEnd).toString() : "P1D");
             values.putNull(CalendarContract.Events.DTEND);
         }
         return values;

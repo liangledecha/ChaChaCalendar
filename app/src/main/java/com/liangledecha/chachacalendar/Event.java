@@ -29,8 +29,10 @@ public final class Event {
     public int visibilityDays;
     /** 重复规则，取值来自本类顶部定义的五个常量。 */
     public String repeatRule;
-    /** 待办的具体提醒时间；其他事项类型固定为空，表示全天事项。 */
+    /** 普通日程或待办的具体提醒时间；纪念日、生日和倒数日固定为空。 */
     public LocalTime time;
+    /** 甘特图可选的计划开始和结束时刻；为空时按原事项日期显示为里程碑。 */
+    public LocalDateTime plannedStart, plannedEnd;
     /** 待办是否已经完成；只有待办类型会使用此字段。 */
     public boolean completed;
     /** 重复待办已经完成到哪一次；保留原始日期可避免每月重复日号逐月漂移。 */
@@ -51,10 +53,22 @@ public final class Event {
     public Event(long id, String title, LocalDate date, String type, int visibilityDays, String repeatRule,
                  LocalTime time, boolean completed, long systemEventId, boolean lunarBased,
                  int lunarMonth, int lunarDay, boolean lunarLeapMonth) {
+        this(id, title, date, type, visibilityDays, repeatRule, time, completed, systemEventId, lunarBased,
+                lunarMonth, lunarDay, lunarLeapMonth, null, null);
+    }
+
+    /** 创建包含甘特计划区间的事项；旧调用仍由上方兼容构造方法保持原有行为。 */
+    public Event(long id, String title, LocalDate date, String type, int visibilityDays, String repeatRule,
+                 LocalTime time, boolean completed, long systemEventId, boolean lunarBased,
+                 int lunarMonth, int lunarDay, boolean lunarLeapMonth,
+                 LocalDateTime plannedStart, LocalDateTime plannedEnd) {
         this.id = id; this.title = title; this.date = date; this.type = type; this.visibilityDays = visibilityDays;
         this.repeatRule = repeatRule == null ? NONE : repeatRule;
-        // 时间只对待办有意义，防止其他类型因旧数据或调用错误而意外显示时间。
-        this.time = "待办".equals(type) ? time : null;
+        // 时间只对普通日程和待办有意义，纪念日、生日和倒数日仍保持全天事项。
+        this.time = supportsTime() ? time : null;
+        if (supportsPlanning() && plannedStart != null && plannedEnd != null && !plannedEnd.isBefore(plannedStart)) {
+            this.plannedStart = plannedStart; this.plannedEnd = plannedEnd;
+        }
         this.completed = "待办".equals(type) && completed;
         this.systemEventId = systemEventId;
         this.lunarBased = lunarBased;
@@ -170,8 +184,26 @@ public final class Event {
     /** 判断当前事项是不是待办，集中维护类型字符串的比较逻辑。 */
     public boolean isTodo() { return "待办".equals(type); }
 
+    /** 普通日程和待办允许设置分钟精度时间。 */
+    public boolean supportsTime() { return "日程".equals(type) || isTodo(); }
+
+    /** 只有普通日程和待办绘制持续时间条，其他类型在甘特图中显示为里程碑。 */
+    public boolean supportsPlanning() { return "日程".equals(type) || isTodo(); }
+
     /** 返回列表和小组件使用的时间文字；非待办不显示时间。 */
-    public String timeLabel() { return isTodo() && time != null ? String.format(Locale.CHINA, "%02d:%02d", time.getHour(), time.getMinute()) : ""; }
+    public String timeLabel() { return supportsTime() && time != null ? String.format(Locale.CHINA, "%02d:%02d", time.getHour(), time.getMinute()) : ""; }
+
+    /** 把保存的计划区间平移到指定重复实例；没有区间时返回事项发生日零点。 */
+    public LocalDateTime ganttStart(LocalDate occurrence) {
+        if (plannedStart == null) return occurrence.atStartOfDay();
+        return plannedStart.plusDays(ChronoUnit.DAYS.between(date, occurrence));
+    }
+
+    /** 返回指定重复实例的计划结束；里程碑的开始和结束相同。 */
+    public LocalDateTime ganttEnd(LocalDate occurrence) {
+        if (plannedEnd == null) return occurrence.atStartOfDay();
+        return plannedEnd.plusDays(ChronoUnit.DAYS.between(date, occurrence));
+    }
 
     /** 返回列表与小组件使用的日期文字，农历事项始终展示其农历设定。 */
     public String displayDate(LocalDate occurrence) {

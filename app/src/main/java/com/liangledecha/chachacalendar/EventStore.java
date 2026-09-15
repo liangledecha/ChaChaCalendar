@@ -21,12 +21,12 @@ import java.util.List;
 public final class EventStore extends SQLiteOpenHelper {
     /** 数据库文件名；数据库保存在应用自己的私有目录中。 */
     private static final String DB = "chacha_calendar.db";
-    /** 创建数据库帮助对象；第五版加入重复待办的本次完成进度。 */
-    public EventStore(Context context) { super(context, DB, null, 5); }
+    /** 创建数据库帮助对象；第六版加入甘特图计划开始和结束时刻。 */
+    public EventStore(Context context) { super(context, DB, null, 6); }
 
     /** 首次安装时建立日程表和全部字段。 */
     @Override public void onCreate(SQLiteDatabase db) {
-        db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,type TEXT NOT NULL,visibility_days INTEGER NOT NULL DEFAULT -1,yearly INTEGER NOT NULL DEFAULT 1,repeat_rule TEXT NOT NULL DEFAULT 'YEARLY',event_time TEXT,completed INTEGER NOT NULL DEFAULT 0,completed_through TEXT,system_event_id INTEGER NOT NULL DEFAULT -1,date_system TEXT NOT NULL DEFAULT 'SOLAR',lunar_month INTEGER NOT NULL DEFAULT 0,lunar_day INTEGER NOT NULL DEFAULT 0,lunar_leap INTEGER NOT NULL DEFAULT 0)");
+        db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,type TEXT NOT NULL,visibility_days INTEGER NOT NULL DEFAULT -1,yearly INTEGER NOT NULL DEFAULT 1,repeat_rule TEXT NOT NULL DEFAULT 'YEARLY',event_time TEXT,completed INTEGER NOT NULL DEFAULT 0,completed_through TEXT,system_event_id INTEGER NOT NULL DEFAULT -1,date_system TEXT NOT NULL DEFAULT 'SOLAR',lunar_month INTEGER NOT NULL DEFAULT 0,lunar_day INTEGER NOT NULL DEFAULT 0,lunar_leap INTEGER NOT NULL DEFAULT 0,planned_start TEXT,planned_end TEXT)");
     }
     /**
      * 升级旧数据库。
@@ -56,6 +56,11 @@ public final class EventStore extends SQLiteOpenHelper {
             db.execSQL("ALTER TABLE events ADD COLUMN completed_through TEXT");
             db.execSQL("UPDATE events SET completed=0 WHERE type='待办' AND repeat_rule<>'NONE'");
         }
+        if (oldVersion < 6) {
+            // 旧事项继续作为单日里程碑显示；只有用户主动设置计划区间后才写入这两个字段。
+            db.execSQL("ALTER TABLE events ADD COLUMN planned_start TEXT");
+            db.execSQL("ALTER TABLE events ADD COLUMN planned_end TEXT");
+        }
     }
     /**
      * 新增或更新一条事项。
@@ -70,6 +75,8 @@ public final class EventStore extends SQLiteOpenHelper {
         v.put("system_event_id", e.systemEventId);
         v.put("date_system", e.lunarBased ? "LUNAR" : "SOLAR");
         v.put("lunar_month", e.lunarMonth); v.put("lunar_day", e.lunarDay); v.put("lunar_leap", e.lunarLeapMonth ? 1 : 0);
+        if (e.plannedStart == null) v.putNull("planned_start"); else v.put("planned_start", e.plannedStart.toString());
+        if (e.plannedEnd == null) v.putNull("planned_end"); else v.put("planned_end", e.plannedEnd.toString());
         if (e.id == 0) { e.id = getWritableDatabase().insertOrThrow("events", null, v); return e.id; }
         getWritableDatabase().update("events", v, "id=?", new String[]{Long.toString(e.id)}); return e.id;
     }
@@ -104,6 +111,8 @@ public final class EventStore extends SQLiteOpenHelper {
         try (Cursor c = getReadableDatabase().query("events", null, null, null, null, null, null)) {
             while (c.moveToNext()) {
                 String storedTime = c.getString(c.getColumnIndexOrThrow("event_time"));
+                String plannedStart = c.getString(c.getColumnIndexOrThrow("planned_start"));
+                String plannedEnd = c.getString(c.getColumnIndexOrThrow("planned_end"));
                 Event event = new Event(
                         c.getLong(c.getColumnIndexOrThrow("id")),
                         c.getString(c.getColumnIndexOrThrow("title")),
@@ -117,7 +126,9 @@ public final class EventStore extends SQLiteOpenHelper {
                         "LUNAR".equals(c.getString(c.getColumnIndexOrThrow("date_system"))),
                         c.getInt(c.getColumnIndexOrThrow("lunar_month")),
                         c.getInt(c.getColumnIndexOrThrow("lunar_day")),
-                        c.getInt(c.getColumnIndexOrThrow("lunar_leap")) == 1);
+                        c.getInt(c.getColumnIndexOrThrow("lunar_leap")) == 1,
+                        plannedStart == null || plannedStart.isEmpty() ? null : java.time.LocalDateTime.parse(plannedStart),
+                        plannedEnd == null || plannedEnd.isEmpty() ? null : java.time.LocalDateTime.parse(plannedEnd));
                 String completedThrough = c.getString(c.getColumnIndexOrThrow("completed_through"));
                 event.completedThrough = completedThrough == null || completedThrough.isEmpty() ? null : LocalDate.parse(completedThrough);
                 out.add(event);
