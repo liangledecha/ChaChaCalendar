@@ -46,6 +46,7 @@ import android.widget.Toast;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.Duration;
 import java.time.Period;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
@@ -707,22 +708,26 @@ public final class MainActivity extends Activity {
                 ? new LunarDateUtils.LunarDate(LunarDateUtils.fromSolar(original.date).year, original.lunarMonth, original.lunarDay, original.lunarLeapMonth)
                 : LunarDateUtils.fromSolar(chosen[0]);
         LunarDateUtils.LunarDate[] chosenLunar = {initialLunar};
-        // 待办默认使用上午九点；只有类型为待办时才会显示和保存这个分钟精度时间。
+        // 待办和普通日程默认使用上午九点，并保存分钟精度时间。
         LocalTime[] chosenTime = { original != null && original.time != null ? original.time : LocalTime.of(9, 0) };
-        /** 甘特计划区间独立于原发生日期，旧事项首次编辑时默认建立一小时计划。 */
+        // 甘特计划默认从事项日期和时间开始，结束时间默认晚一小时。
         LocalDateTime[] plannedStart = { original != null && original.plannedStart != null ? original.plannedStart : LocalDateTime.of(chosen[0], chosenTime[0]) };
         LocalDateTime[] plannedEnd = { original != null && original.plannedEnd != null ? original.plannedEnd : plannedStart[0].plusHours(1) };
-        boolean[] planEdited = { original != null && original.plannedStart != null && original.plannedEnd != null };
         // 表单纵向排列，各行统一使用“左标签、右控件”结构。
         LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(22), dp(8), dp(22), 0);
         // 名称是唯一必填的自由文本字段。
         EditText title = new EditText(this); title.setHint("名称，例如：结婚纪念日"); if (original != null) title.setText(original.title); box.addView(title, new LinearLayout.LayoutParams(-1, dp(56)));
         // 类型决定新事项的默认重复规则，但用户之后仍可手动修改。
         // 待办使用最频繁且功能最多，放在首项并成为新建事项的默认类型。
-        String[] typeNames = {"待办", "日程", "纪念日", "生日", "倒数日"};
+        String[] typeNames = {"待办", "普通日程", "纪念日", "生日", "倒数日"};
         Spinner type = spinner(typeNames);
         if (original != null) for (int index = 0; index < typeNames.length; index++) if (typeNames[index].equals(original.type)) type.setSelection(index);
         box.addView(labeled("类型", type));
+        // 甘特开关默认关闭；编辑已有甘特事项时恢复原有开启状态。
+        Switch ganttEnabled = new Switch(this);
+        ganttEnabled.setChecked(original != null && original.plannedStart != null && original.plannedEnd != null);
+        LinearLayout ganttSwitchRow = labeled("是否甘特", ganttEnabled);
+        box.addView(ganttSwitchRow);
         // 日期制逐条保存。公历与农历是平行设定，不受月历全局显示开关影响。
         Spinner dateSystem = spinner(new String[]{"公历", "农历"});
         dateSystem.setSelection(original != null && original.lunarBased ? 1 : 0);
@@ -737,23 +742,19 @@ public final class MainActivity extends Activity {
                 }, chosen[0].getYear(), chosen[0].getMonthValue()-1, chosen[0].getDayOfMonth()).show();
             } else showLunarDatePicker(date, chosen, chosenLunar);
         });
-        box.addView(labeled("日期", date));
-        // 时间行只服务于待办。纪念日、生日和倒数日保持全天事项，不增加无意义输入。
+        LinearLayout dateRow = labeled("日期", date);
+        box.addView(dateRow);
+        // 时间行服务于待办和普通日程。纪念日、生日和倒数日保持全天事项。
         Button time = new Button(this); time.setAllCaps(false); time.setText(formatTime(chosenTime[0]));
         time.setOnClickListener(v -> new TimePickerDialog(this, (picker, hour, minute) -> {
             chosenTime[0] = LocalTime.of(hour, minute); time.setText(formatTime(chosenTime[0]));
         }, chosenTime[0].getHour(), chosenTime[0].getMinute(), true).show());
         LinearLayout timeRow = labeled("时间", time);
-        timeRow.setVisibility(type.getSelectedItemPosition() <= 1 ? View.VISIBLE : View.GONE);
         box.addView(timeRow);
         Button planStart = new Button(this); planStart.setAllCaps(false); planStart.setText(formatDateTime(plannedStart[0]));
-        planStart.setOnClickListener(v -> { planEdited[0] = true; showDateTimePicker(planStart, plannedStart); });
         LinearLayout planStartRow = labeled("甘特开始", planStart);
         Button planEnd = new Button(this); planEnd.setAllCaps(false); planEnd.setText(formatDateTime(plannedEnd[0]));
-        planEnd.setOnClickListener(v -> { planEdited[0] = true; showDateTimePicker(planEnd, plannedEnd); });
         LinearLayout planEndRow = labeled("甘特结束", planEnd);
-        boolean initialPlanning = type.getSelectedItemPosition() <= 1;
-        planStartRow.setVisibility(initialPlanning ? View.VISIBLE : View.GONE); planEndRow.setVisibility(initialPlanning ? View.VISIBLE : View.GONE);
         box.addView(planStartRow); box.addView(planEndRow);
         // 显示名称供用户选择，整数数组是数据库真正保存的提前天数。
         String[] visibilityNames = {"一直显示（默认）", "15天前显示", "7天前显示", "5天前显示", "3天前显示"};
@@ -767,16 +768,46 @@ public final class MainActivity extends Activity {
         Spinner repeat = spinner(repeatNames);
         if (original != null) for (int i=0;i<repeatValues.length;i++) if (repeatValues[i].equals(original.repeatRule)) repeat.setSelection(i);
         box.addView(labeled("重复", repeat));
-        // 类型变化时即时控制时间行；新建事项还会按类型给出合理的默认重复规则。
+        // 统一控制普通日期和甘特区间的显示，避免两个日期入口同时出现。
+        Runnable updateGanttFields = () -> {
+            boolean planningType = type.getSelectedItemPosition() <= 1;
+            boolean gantt = planningType && ganttEnabled.isChecked();
+            ganttSwitchRow.setVisibility(planningType ? View.VISIBLE : View.GONE);
+            timeRow.setVisibility(planningType ? View.VISIBLE : View.GONE);
+            dateRow.setVisibility(gantt ? View.GONE : View.VISIBLE);
+            planStartRow.setVisibility(gantt ? View.VISIBLE : View.GONE);
+            planEndRow.setVisibility(gantt ? View.VISIBLE : View.GONE);
+        };
+        // 开启甘特时以当前日期为甘特开始日期，并保留原计划时长。
+        ganttEnabled.setOnCheckedChangeListener((button, checked) -> {
+            if (checked && type.getSelectedItemPosition() <= 1) {
+                Duration duration = Duration.between(plannedStart[0], plannedEnd[0]);
+                if (duration.isZero() || duration.isNegative()) duration = Duration.ofHours(1);
+                plannedStart[0] = LocalDateTime.of(chosen[0], chosenTime[0]);
+                plannedEnd[0] = plannedStart[0].plus(duration);
+                planStart.setText(formatDateTime(plannedStart[0]));
+                planEnd.setText(formatDateTime(plannedEnd[0]));
+            }
+            updateGanttFields.run();
+        });
+        // 修改甘特开始后，同步隐藏的“日期”和时间，使两种录入方式表示同一事项起点。
+        planStart.setOnClickListener(v -> showDateTimePicker(planStart, plannedStart, () -> {
+            chosen[0] = plannedStart[0].toLocalDate();
+            chosenTime[0] = plannedStart[0].toLocalTime();
+            chosenLunar[0] = LunarDateUtils.fromSolar(chosen[0]);
+            date.setText(dateSystem.getSelectedItemPosition() == 1 ? formatLunarChoice(chosenLunar[0], chosen[0]) : formatDate(chosen[0]));
+            time.setText(formatTime(chosenTime[0]));
+        }));
+        planEnd.setOnClickListener(v -> showDateTimePicker(planEnd, plannedEnd, null));
+        // 类型变化时即时控制时间和甘特行；新建事项还会按类型给出合理的默认重复规则。
         type.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                boolean planning = position <= 1;
-                timeRow.setVisibility(planning ? View.VISIBLE : View.GONE);
-                planStartRow.setVisibility(planning ? View.VISIBLE : View.GONE); planEndRow.setVisibility(planning ? View.VISIBLE : View.GONE);
+                updateGanttFields.run();
                 if (original == null) repeat.setSelection(position == 2 || position == 3 ? 0 : repeatValues.length - 1);
             }
             @Override public void onNothingSelected(AdapterView<?> parent) { }
         });
+        updateGanttFields.run();
         dateSystem.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
                 if (position == 1) {
@@ -801,12 +832,15 @@ public final class MainActivity extends Activity {
             if (name.isEmpty()) { title.setError("请输入名称"); return; }
             long id = original == null ? 0 : original.id;
             String selectedType = type.getSelectedItem().toString();
-            boolean planningType = "日程".equals(selectedType) || "待办".equals(selectedType);
-            if (planningType && !planEdited[0]) {
-                plannedStart[0] = LocalDateTime.of(chosen[0], chosenTime[0]); plannedEnd[0] = plannedStart[0].plusHours(1);
-            }
-            if (planningType && !plannedEnd[0].isAfter(plannedStart[0])) {
+            boolean planningType = "普通日程".equals(selectedType) || "待办".equals(selectedType);
+            boolean gantt = planningType && ganttEnabled.isChecked();
+            if (gantt && !plannedEnd[0].isAfter(plannedStart[0])) {
                 Toast.makeText(this, "甘特结束时间必须晚于开始时间", Toast.LENGTH_LONG).show(); return;
+            }
+            if (gantt) {
+                chosen[0] = plannedStart[0].toLocalDate();
+                chosenTime[0] = plannedStart[0].toLocalTime();
+                chosenLunar[0] = LunarDateUtils.fromSolar(chosen[0]);
             }
             Event saved = new Event(id, name, chosen[0], selectedType,
                     visibilityValues[visibility.getSelectedItemPosition()], repeatValues[repeat.getSelectedItemPosition()],
@@ -815,7 +849,7 @@ public final class MainActivity extends Activity {
                     original == null ? -1 : original.systemEventId,
                     dateSystem.getSelectedItemPosition() == 1,
                     chosenLunar[0].month, chosenLunar[0].day, chosenLunar[0].leapMonth,
-                    planningType ? plannedStart[0] : null, planningType ? plannedEnd[0] : null);
+                    gantt ? plannedStart[0] : null, gantt ? plannedEnd[0] : null);
             // 只在重复锚点和规则未改变时保留已完成周期，修改计划本身则从新计划重新开始。
             if (original != null && "待办".equals(selectedType) && !Event.NONE.equals(saved.repeatRule)
                     && original.isTodo() && original.repeatRule.equals(saved.repeatRule) && original.date.equals(saved.date)) {
@@ -1214,12 +1248,13 @@ public final class MainActivity extends Activity {
     private String formatDateTime(LocalDateTime value) { return formatDate(value.toLocalDate()) + "  " + formatTime(value.toLocalTime()); }
 
     /** 依次选择甘特计划的公历日期和分钟精度时间，并把结果写回按钮。 */
-    private void showDateTimePicker(Button button, LocalDateTime[] value) {
+    private void showDateTimePicker(Button button, LocalDateTime[] value, Runnable afterChange) {
         LocalDateTime current = value[0];
         new DatePickerDialog(this, (datePicker, year, month, day) ->
                 new TimePickerDialog(this, (timePicker, hour, minute) -> {
                     value[0] = LocalDateTime.of(year, month + 1, day, hour, minute);
                     button.setText(formatDateTime(value[0]));
+                    if (afterChange != null) afterChange.run();
                 }, current.getHour(), current.getMinute(), true).show(),
                 current.getYear(), current.getMonthValue() - 1, current.getDayOfMonth()).show();
     }

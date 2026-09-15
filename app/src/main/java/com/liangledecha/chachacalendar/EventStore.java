@@ -21,8 +21,8 @@ import java.util.List;
 public final class EventStore extends SQLiteOpenHelper {
     /** 数据库文件名；数据库保存在应用自己的私有目录中。 */
     private static final String DB = "chacha_calendar.db";
-    /** 创建数据库帮助对象；第六版加入甘特图计划开始和结束时刻。 */
-    public EventStore(Context context) { super(context, DB, null, 6); }
+    /** 创建数据库帮助对象；第七版把旧“日程”类型统一更名为“普通日程”。 */
+    public EventStore(Context context) { super(context, DB, null, 7); }
 
     /** 首次安装时建立日程表和全部字段。 */
     @Override public void onCreate(SQLiteDatabase db) {
@@ -60,6 +60,10 @@ public final class EventStore extends SQLiteOpenHelper {
             // 旧事项继续作为单日里程碑显示；只有用户主动设置计划区间后才写入这两个字段。
             db.execSQL("ALTER TABLE events ADD COLUMN planned_start TEXT");
             db.execSQL("ALTER TABLE events ADD COLUMN planned_end TEXT");
+        }
+        if (oldVersion < 7) {
+            // 只改类型展示名称，不触碰日期、重复、完成状态或甘特计划区间。
+            db.execSQL("UPDATE events SET type='普通日程' WHERE type='日程'");
         }
     }
     /**

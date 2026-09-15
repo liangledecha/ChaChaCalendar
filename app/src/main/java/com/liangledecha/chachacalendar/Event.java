@@ -62,7 +62,9 @@ public final class Event {
                  LocalTime time, boolean completed, long systemEventId, boolean lunarBased,
                  int lunarMonth, int lunarDay, boolean lunarLeapMonth,
                  LocalDateTime plannedStart, LocalDateTime plannedEnd) {
-        this.id = id; this.title = title; this.date = date; this.type = type; this.visibilityDays = visibilityDays;
+        this.id = id; this.title = title; this.date = date;
+        // 1.11曾短暂使用“日程”名称，读取时直接归一化，避免迁移前后的数据出现两种名称。
+        this.type = "日程".equals(type) ? "普通日程" : type; this.visibilityDays = visibilityDays;
         this.repeatRule = repeatRule == null ? NONE : repeatRule;
         // 时间只对普通日程和待办有意义，纪念日、生日和倒数日仍保持全天事项。
         this.time = supportsTime() ? time : null;
@@ -185,10 +187,10 @@ public final class Event {
     public boolean isTodo() { return "待办".equals(type); }
 
     /** 普通日程和待办允许设置分钟精度时间。 */
-    public boolean supportsTime() { return "日程".equals(type) || isTodo(); }
+    public boolean supportsTime() { return "普通日程".equals(type) || isTodo(); }
 
     /** 只有普通日程和待办绘制持续时间条，其他类型在甘特图中显示为里程碑。 */
-    public boolean supportsPlanning() { return "日程".equals(type) || isTodo(); }
+    public boolean supportsPlanning() { return "普通日程".equals(type) || isTodo(); }
 
     /** 返回列表和小组件使用的时间文字；非待办不显示时间。 */
     public String timeLabel() { return supportsTime() && time != null ? String.format(Locale.CHINA, "%02d:%02d", time.getHour(), time.getMinute()) : ""; }
@@ -215,6 +217,23 @@ public final class Event {
     public LocalDateTime ganttEnd(LocalDate occurrence) {
         if (plannedEnd == null) return occurrence.atStartOfDay();
         return plannedEnd.plusDays(ChronoUnit.DAYS.between(date, occurrence));
+    }
+
+    /**
+     * 返回可能与可见起点相交的最早“发生日”。计划结束晚于发生日时必须向前查找，
+     * 这样横条的前半段不会因为发生日还在屏幕右侧而被漏掉。
+     */
+    public LocalDate ganttSearchStart(LocalDate visibleStart) {
+        if (plannedEnd == null) return visibleStart;
+        long endOffset = ChronoUnit.DAYS.between(date, plannedEnd.toLocalDate());
+        return visibleStart.minusDays(endOffset).minusDays(1);
+    }
+
+    /** 返回可能与可见终点相交的最晚“发生日”，同时处理计划开始早于发生日的情况。 */
+    public LocalDate ganttSearchEnd(LocalDate visibleEnd) {
+        if (plannedStart == null) return visibleEnd;
+        long startOffset = ChronoUnit.DAYS.between(date, plannedStart.toLocalDate());
+        return visibleEnd.minusDays(startOffset).plusDays(1);
     }
 
     /** 返回列表与小组件使用的日期文字，农历事项始终展示其农历设定。 */

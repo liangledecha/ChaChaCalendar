@@ -31,4 +31,16 @@ public final class EventGanttTest {
                 LocalTime.of(9, 0), false, -1, false, 0, 0, false);
         assertEquals(-1, todo.anniversaryAt(LocalDate.of(2025, 2, 28)));
     }
+
+    /** 发生日在屏幕外时，只要九月一日至十八日的计划条与窗口相交，搜索范围仍必须包含它。 */
+    @Test public void longBarRemainsDiscoverableBeforeOccurrenceDate() {
+        LocalDate occurrence = LocalDate.of(2026, 9, 15);
+        Event event = new Event(4, "跨日事项", occurrence, "普通日程", -1, Event.NONE, LocalTime.of(9, 0),
+                false, -1, false, 0, 0, false,
+                LocalDateTime.of(2026, 9, 1, 9, 0), LocalDateTime.of(2026, 9, 18, 18, 0));
+        LocalDate searchStart = event.ganttSearchStart(LocalDate.of(2026, 9, 4));
+        LocalDate searchEnd = event.ganttSearchEnd(LocalDate.of(2026, 9, 8));
+        org.junit.Assert.assertFalse(occurrence.isBefore(searchStart));
+        org.junit.Assert.assertFalse(occurrence.isAfter(searchEnd));
+    }
 }

@@ -153,12 +153,10 @@ public final class GanttView extends View {
         }
     }
 
-    /** 绘制当前可见范围内的重复实例；最多向前追溯一年持续时间。 */
+    /** 绘制所有可能与当前可见范围相交的重复实例，包括发生日在屏幕外的长计划条。 */
     private void drawOccurrences(Canvas canvas, Event event, float rowTop, LocalDate visibleStart, LocalDate visibleEnd) {
-        long span = event.plannedStart == null || event.plannedEnd == null ? 0 :
-                Math.min(366, Math.max(0, ChronoUnit.DAYS.between(event.plannedStart.toLocalDate(), event.plannedEnd.toLocalDate())));
-        LocalDate search = visibleStart.minusDays(span + 1);
-        for (LocalDate date = search; !date.isAfter(visibleEnd); date = date.plusDays(1)) {
+        LocalDate searchStart = event.ganttSearchStart(visibleStart), searchEnd = event.ganttSearchEnd(visibleEnd);
+        for (LocalDate date = searchStart; !date.isAfter(searchEnd); date = date.plusDays(1)) {
             if (!event.occursOn(date)) continue;
             LocalDateTime start = event.ganttStart(date), end = event.ganttEnd(date);
             float x1 = dateX(start), x2 = dateX(end);
