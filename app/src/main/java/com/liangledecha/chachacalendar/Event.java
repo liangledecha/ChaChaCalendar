@@ -193,6 +193,18 @@ public final class Event {
     /** 返回列表和小组件使用的时间文字；非待办不显示时间。 */
     public String timeLabel() { return supportsTime() && time != null ? String.format(Locale.CHINA, "%02d:%02d", time.getHour(), time.getMinute()) : ""; }
 
+    /**
+     * 计算纪念日或生日在指定下一次发生日是第几周年。
+     * 农历事项按农历年差计算，公历闰日直接按年份差计算，避免二月二十九日被少算一年。
+     */
+    public int anniversaryAt(LocalDate occurrence) {
+        if (!("纪念日".equals(type) || "生日".equals(type)) || occurrence == null) return -1;
+        int years = lunarBased
+                ? LunarDateUtils.fromSolar(occurrence).year - LunarDateUtils.fromSolar(date).year
+                : occurrence.getYear() - date.getYear();
+        return Math.max(0, years);
+    }
+
     /** 把保存的计划区间平移到指定重复实例；没有区间时返回事项发生日零点。 */
     public LocalDateTime ganttStart(LocalDate occurrence) {
         if (plannedStart == null) return occurrence.atStartOfDay();

@@ -67,7 +67,10 @@ public final class CalendarWidgetService extends RemoteViewsService {
             RemoteViews row = new RemoteViews(context.getPackageName(), R.layout.widget_event_row_v2);
             String details = CalendarWidgetProvider.widgetDetails(event, today);
             int textColor = event.isOverdue() ? Color.rgb(210, 55, 67) : Color.rgb(32, 39, 55);
-            row.setTextViewText(R.id.widget_item_text, "● " + event.title);
+            LocalDate next = event.nextDate(today);
+            int anniversary = event.anniversaryAt(next);
+            String anniversaryText = anniversary < 0 ? "" : "·" + anniversary + "周年";
+            row.setTextViewText(R.id.widget_item_text, "● " + event.title + anniversaryText);
             row.setTextViewText(R.id.widget_item_details, details);
             row.setTextColor(R.id.widget_item_text, textColor);
             row.setTextColor(R.id.widget_item_details, textColor);

@@ -315,7 +315,7 @@ public final class MainActivity extends Activity {
         // 第七步：创建悬浮底栏，五个入口使用统一间距并避让系统导航区。
         LinearLayout bottom = new LinearLayout(this); bottom.setGravity(Gravity.CENTER); bottom.setPadding(dp(8), dp(7), dp(8), dp(7));
         GradientDrawable bottomBg = new GradientDrawable(); bottomBg.setColor(Color.WHITE); bottomBg.setCornerRadius(dp(24)); bottom.setBackground(bottomBg); bottom.setElevation(dp(10));
-        Button today = circleButton("今"); today.setOnClickListener(v -> { todosOnly=false; switchSection(Section.MONTH); calendar.today(); updateTabStyles(); });
+        Button today = circleButton("今"); today.setOnClickListener(v -> goToday());
         bottomCalendar = bottomItem("日历", true); bottomCalendar.setOnClickListener(v -> { todosOnly = false; switchSection(Section.MONTH); updateTabStyles(); });
         bottomAgenda = bottomItem("日程", false); bottomAgenda.setOnClickListener(v -> { todosOnly=false; switchSection(Section.AGENDA); updateTabStyles(); });
         bottomTodo = bottomItem("待办", false); bottomTodo.setOnClickListener(v -> showTodoPage());
@@ -473,6 +473,17 @@ public final class MainActivity extends Activity {
     private void cycleGanttScale() {
         int next = (ganttView.getScale() + 1) % 3; ganttView.setScale(next);
         ganttScaleButton.setText(next == GanttView.SCALE_DAY ? "日视图" : next == GanttView.SCALE_WEEK ? "周视图" : "月视图");
+    }
+
+    /**
+     * 统一处理底栏“今”：日历回到今天，日程和待办的甘特图回到今天线，列表回到第一条。
+     * 该操作保留用户当前所在的日程或待办页面，不再强制跳回日历页。
+     */
+    private void goToday() {
+        if (section != Section.AGENDA) {
+            todosOnly = false; switchSection(Section.MONTH); calendar.today(); updateTabStyles(); return;
+        }
+        if (ganttMode) ganttView.scrollToToday(); else list.setSelection(0);
     }
 
     /** 从全部事项中筛出类型为“待办”的记录。 */
@@ -707,7 +718,8 @@ public final class MainActivity extends Activity {
         // 名称是唯一必填的自由文本字段。
         EditText title = new EditText(this); title.setHint("名称，例如：结婚纪念日"); if (original != null) title.setText(original.title); box.addView(title, new LinearLayout.LayoutParams(-1, dp(56)));
         // 类型决定新事项的默认重复规则，但用户之后仍可手动修改。
-        String[] typeNames = {"日程", "纪念日", "生日", "待办", "倒数日"};
+        // 待办使用最频繁且功能最多，放在首项并成为新建事项的默认类型。
+        String[] typeNames = {"待办", "日程", "纪念日", "生日", "倒数日"};
         Spinner type = spinner(typeNames);
         if (original != null) for (int index = 0; index < typeNames.length; index++) if (typeNames[index].equals(original.type)) type.setSelection(index);
         box.addView(labeled("类型", type));
@@ -732,7 +744,7 @@ public final class MainActivity extends Activity {
             chosenTime[0] = LocalTime.of(hour, minute); time.setText(formatTime(chosenTime[0]));
         }, chosenTime[0].getHour(), chosenTime[0].getMinute(), true).show());
         LinearLayout timeRow = labeled("时间", time);
-        timeRow.setVisibility(type.getSelectedItemPosition() == 0 || type.getSelectedItemPosition() == 3 ? View.VISIBLE : View.GONE);
+        timeRow.setVisibility(type.getSelectedItemPosition() <= 1 ? View.VISIBLE : View.GONE);
         box.addView(timeRow);
         Button planStart = new Button(this); planStart.setAllCaps(false); planStart.setText(formatDateTime(plannedStart[0]));
         planStart.setOnClickListener(v -> { planEdited[0] = true; showDateTimePicker(planStart, plannedStart); });
@@ -740,7 +752,7 @@ public final class MainActivity extends Activity {
         Button planEnd = new Button(this); planEnd.setAllCaps(false); planEnd.setText(formatDateTime(plannedEnd[0]));
         planEnd.setOnClickListener(v -> { planEdited[0] = true; showDateTimePicker(planEnd, plannedEnd); });
         LinearLayout planEndRow = labeled("甘特结束", planEnd);
-        boolean initialPlanning = type.getSelectedItemPosition() == 0 || type.getSelectedItemPosition() == 3;
+        boolean initialPlanning = type.getSelectedItemPosition() <= 1;
         planStartRow.setVisibility(initialPlanning ? View.VISIBLE : View.GONE); planEndRow.setVisibility(initialPlanning ? View.VISIBLE : View.GONE);
         box.addView(planStartRow); box.addView(planEndRow);
         // 显示名称供用户选择，整数数组是数据库真正保存的提前天数。
@@ -758,10 +770,10 @@ public final class MainActivity extends Activity {
         // 类型变化时即时控制时间行；新建事项还会按类型给出合理的默认重复规则。
         type.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                boolean planning = position == 0 || position == 3;
+                boolean planning = position <= 1;
                 timeRow.setVisibility(planning ? View.VISIBLE : View.GONE);
                 planStartRow.setVisibility(planning ? View.VISIBLE : View.GONE); planEndRow.setVisibility(planning ? View.VISIBLE : View.GONE);
-                if (original == null) repeat.setSelection(position == 1 || position == 2 ? 0 : repeatValues.length - 1);
+                if (original == null) repeat.setSelection(position == 2 || position == 3 ? 0 : repeatValues.length - 1);
             }
             @Override public void onNothingSelected(AdapterView<?> parent) { }
         });

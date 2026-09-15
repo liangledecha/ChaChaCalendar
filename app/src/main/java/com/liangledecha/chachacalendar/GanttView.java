@@ -88,6 +88,13 @@ public final class GanttView extends View {
     /** 返回当前密度，供页面上的循环切换按钮生成中文名称。 */
     public int getScale() { return scale; }
 
+    /** 把今天重新放回时间轴左侧附近，并回到第一条事项。 */
+    public void scrollToToday() {
+        long todayIndex = ChronoUnit.DAYS.between(baseDate, LocalDate.now());
+        horizontalOffset = clamp((todayIndex - 3) * dayWidth, 0, maxHorizontal());
+        verticalOffset = 0; invalidate();
+    }
+
     @Override protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
         float width = getWidth(), height = getHeight();

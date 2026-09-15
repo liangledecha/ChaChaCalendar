@@ -21,4 +21,14 @@ public final class EventGanttTest {
         assertEquals(start.plusWeeks(2), event.ganttStart(occurrence));
         assertEquals(Duration.between(start, end), Duration.between(event.ganttStart(occurrence), event.ganttEnd(occurrence)));
     }
+
+    /** 公历闰日周年按年份计算，不能因下一年落在二月二十八日而少算。 */
+    @Test public void anniversaryUsesOccurrenceYear() {
+        Event anniversary = new Event(2, "纪念", LocalDate.of(2024, 2, 29), "纪念日", -1, Event.YEARLY,
+                null, false, -1, false, 0, 0, false);
+        assertEquals(1, anniversary.anniversaryAt(LocalDate.of(2025, 2, 28)));
+        Event todo = new Event(3, "待办", LocalDate.of(2024, 2, 29), "待办", -1, Event.NONE,
+                LocalTime.of(9, 0), false, -1, false, 0, 0, false);
+        assertEquals(-1, todo.anniversaryAt(LocalDate.of(2025, 2, 28)));
+    }
 }
