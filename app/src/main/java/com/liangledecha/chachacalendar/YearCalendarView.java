@@ -28,6 +28,8 @@ public final class YearCalendarView extends View {
     private float downX, downY;
     /** 换年动画是否正在进行，防止连续手势造成动画叠加。 */
     private boolean animating;
+    /** 当前主题主色，用于月份标题和当天圆圈。 */
+    private int accent = Color.rgb(95, 143, 105);
     /** 主页面注册的事件监听器。 */
     private Listener listener;
 
@@ -39,6 +41,8 @@ public final class YearCalendarView extends View {
     public int getYear() { return year; }
     /** 跳转到指定年份并请求重新绘制。 */
     public void setYear(int value) { year = value; invalidate(); }
+    /** 应用用户选择的主题主色。 */
+    public void setAccent(int color) { accent = color; invalidate(); }
 
     /** 把可用区域平均分成十二格，并逐个绘制月份。 */
     @Override protected void onDraw(Canvas canvas) {
@@ -53,7 +57,7 @@ public final class YearCalendarView extends View {
     /** 在给定矩形范围内绘制一个月份的标题、星期和全部日期数字。 */
     private void drawMonth(Canvas canvas, YearMonth ym, float left, float top, float width, float height) {
         float side = dp(7), usable = width - side * 2, cellW = usable / 7f;
-        paint.setTextAlign(Paint.Align.LEFT); paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD); paint.setTextSize(sp(14)); paint.setColor(Color.rgb(82,110,240));
+        paint.setTextAlign(Paint.Align.LEFT); paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD); paint.setTextSize(sp(14)); paint.setColor(accent);
         canvas.drawText(ym.getMonthValue() + "月", left + side, top + dp(20), paint);
         paint.setTypeface(android.graphics.Typeface.DEFAULT); paint.setTextAlign(Paint.Align.CENTER); paint.setTextSize(sp(7.5f)); paint.setColor(Color.rgb(145,150,164));
         String[] week = {"一","二","三","四","五","六","日"};
@@ -65,7 +69,7 @@ public final class YearCalendarView extends View {
             int pos = offset + day - 1, c = pos % 7, r = pos / 7;
             float cx = left + side + cellW*(c+.5f), cy = top + dp(45) + cellH*r;
             if (today.getYear()==year && today.getMonthValue()==ym.getMonthValue() && today.getDayOfMonth()==day) {
-                paint.setColor(Color.rgb(82,110,240)); canvas.drawCircle(cx, cy-dp(2.5f), dp(7), paint); paint.setColor(Color.WHITE);
+                paint.setColor(accent); canvas.drawCircle(cx, cy-dp(2.5f), dp(7), paint); paint.setColor(Color.WHITE);
             } else paint.setColor(c >= 5 ? Color.rgb(118,123,139) : Color.rgb(39,45,58));
             paint.setTextSize(sp(7.5f)); canvas.drawText(Integer.toString(day), cx, cy, paint);
         }

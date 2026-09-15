@@ -1,16 +1,19 @@
 package com.liangledecha.chachacalendar;
 
 import android.app.PendingIntent;
+import android.app.ActivityOptions;
 import android.appwidget.AppWidgetManager;
 import android.appwidget.AppWidgetProvider;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.TypedValue;
+import android.view.View;
 import android.widget.RemoteViews;
 
 import java.time.LocalDate;
@@ -44,7 +47,13 @@ public final class CalendarWidgetProvider extends AppWidgetProvider {
     @Override public void onReceive(Context context, Intent intent) {
         super.onReceive(context, intent);
         String action = intent.getAction();
-        if (Intent.ACTION_DATE_CHANGED.equals(action) || Intent.ACTION_TIMEZONE_CHANGED.equals(action) || ACTION_REFRESH.equals(action)) {
+        if (Intent.ACTION_DATE_CHANGED.equals(action) || Intent.ACTION_TIMEZONE_CHANGED.equals(action)
+                || Intent.ACTION_MY_PACKAGE_REPLACED.equals(action) || ACTION_REFRESH.equals(action)) {
+            // 升级或手动刷新时切换列表缓存标识，确保桌面重新绑定工厂并读取完整名称。
+            if (ACTION_REFRESH.equals(action) || Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)) {
+                SharedPreferences settings = context.getSharedPreferences("settings", Context.MODE_PRIVATE);
+                settings.edit().putLong("widget_binding_generation", settings.getLong("widget_binding_generation", 0L) + 1).apply();
+            }
             AppWidgetManager manager = AppWidgetManager.getInstance(context);
             updateAll(context, manager, manager.getAppWidgetIds(new ComponentName(context, CalendarWidgetProvider.class)));
             // 农历年度重复无法用系统公历重复规则表达，日期变化时把下一次真实公历落点补写给系统日历。
@@ -81,22 +90,28 @@ public final class CalendarWidgetProvider extends AppWidgetProvider {
         int background = backgroundForTransparency(preferences.getInt("widget_transparency", 15));
         int headerLevel = levelIndex(preferences.getInt("widget_header_font_level", 1));
         int eventLevel = levelIndex(preferences.getInt("widget_event_font_level", 1));
+        int accent = preferences.getInt("theme_accent", Color.rgb(95, 143, 105));
         boolean showLunar = preferences.getBoolean("show_lunar_dates", true);
         // 每个桌面实例都要单独创建远程视图并提交给系统。
         for (int id : ids) {
-            RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.calendar_widget);
+            // 新布局编号使桌面丢弃旧控件树，避免同版本覆盖安装后把内容和点击写到错误控件。
+            RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.calendar_widget_v3);
             views.setInt(R.id.widget_root, "setBackgroundResource", background);
             String specialDate = specialDateLabel(context, preferences, today);
             String todayText = today.format(dateFormat) + (!specialDate.isEmpty() ? " · " + specialDate
                     : showLunar ? " · 农历" + LunarDateUtils.compact(today) : "");
             views.setTextViewText(R.id.widget_date, todayText);
+            views.setTextColor(R.id.widget_date, accent);
+            views.setTextColor(R.id.widget_refresh, Color.rgb(29, 36, 51));
+            views.setViewVisibility(R.id.widget_refresh, preferences.getBoolean("show_widget_refresh", false) ? View.VISIBLE : View.GONE);
             views.setTextViewTextSize(R.id.widget_time, TypedValue.COMPLEX_UNIT_SP, TIME_SIZES[headerLevel]);
             views.setTextViewTextSize(R.id.widget_date, TypedValue.COMPLEX_UNIT_SP, DATE_SIZES[headerLevel]);
             views.setTextViewTextSize(R.id.widget_weather, TypedValue.COMPLEX_UNIT_SP, WEATHER_SIZES[headerLevel]);
             // 系统列表服务按需提供全部事项；每个组件使用不同地址，避免桌面错误复用另一实例的数据。
             Intent listService = new Intent(context, CalendarWidgetService.class)
                     .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id);
-            listService.setData(Uri.parse(listService.toUri(Intent.URI_INTENT_SCHEME)));
+            listService.setData(Uri.parse("chachacalendar://widget-items/layout-3/" + id + "/"
+                    + preferences.getLong("widget_binding_generation", 0L)));
             views.setRemoteAdapter(R.id.widget_event_list, listService);
             views.setEmptyView(R.id.widget_event_list, R.id.widget_empty);
             // 任何可靠的组件刷新都会把列表恢复到第一条，防止刷新后仍停留在旧位置。
@@ -108,35 +123,40 @@ public final class CalendarWidgetProvider extends AppWidgetProvider {
             // 安卓十二起集合点击模板必须明确允许系统合并行级填充意图；目标组件仍固定为本应用页面。
             int templateFlags = PendingIntent.FLAG_UPDATE_CURRENT
                     | (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ? PendingIntent.FLAG_MUTABLE : 0);
-            PendingIntent openAgendaPending = PendingIntent.getActivity(context, 1000 + id, openAgenda, templateFlags);
+            PendingIntent openAgendaPending = activityPendingIntent(context, 1000 + id, openAgenda, templateFlags);
             views.setPendingIntentTemplate(R.id.widget_event_list, openAgendaPending);
             views.setOnClickPendingIntent(R.id.widget_empty, openAgendaPending);
             views.setOnClickPendingIntent(R.id.widget_root, openAgendaPending);
             // 刷新按钮只重新读取本地数据库，不启动网络请求或常驻后台任务。
             Intent refresh = new Intent(context, CalendarWidgetProvider.class).setAction(ACTION_REFRESH);
             views.setOnClickPendingIntent(R.id.widget_refresh, PendingIntent.getBroadcast(context, 2000 + id, refresh, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
+            // 加号直接调用应用内同一套新建表单，新增日期仍遵循主页面当前选中日期。
+            Intent create = new Intent(context, MainActivity.class).putExtra(MainActivity.EXTRA_OPEN_CREATE, true)
+                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            views.setOnClickPendingIntent(R.id.widget_add, activityPendingIntent(context, 4000 + id, create,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
             // 如果系统公开了天气应用入口，天气文字可点击；否则只显示不可用状态。
             Intent weather = SystemWeatherBridge.findWeatherApp(context);
             if (weather != null) {
                 views.setTextViewText(R.id.widget_weather, "天气 · 系统来源");
-                views.setOnClickPendingIntent(R.id.widget_weather, PendingIntent.getActivity(context, 3000 + id, weather, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
+                views.setOnClickPendingIntent(R.id.widget_weather, activityPendingIntent(context, 3000 + id, weather,
+                        PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
             } else {
                 views.setTextViewText(R.id.widget_weather, "天气 · 系统未开放");
             }
-            // 先让列表工厂重新读取数据，再提交带有“回到第一条”动作的完整远程视图。
-            manager.notifyAppWidgetViewDataChanged(id, R.id.widget_event_list);
+            // 先提交新布局和点击绑定，再通知其列表读取数据，防止通知发给旧列表。
             manager.updateAppWidget(id, views);
+            manager.notifyAppWidgetViewDataChanged(id, R.id.widget_event_list);
         }
     }
 
-    /** 把一条事项压缩成小组件中的两行信息，待办会在类型后显示分钟精度时间。 */
-    static String widgetText(Event event, LocalDate today) {
+    /** 小组件第二行固定为类型、日期及待办时间、倒计时；名称单独放在第一行。 */
+    static String widgetDetails(Event event, LocalDate today) {
         LocalDate next = event.nextDate(today);
         long days = event.daysUntil(today);
-        String time = event.timeLabel().isEmpty() ? "" : " · " + event.timeLabel();
-        String countdown = event.isOverdue() ? "已过期" : days == 0 ? "今天" : days > 0 ? days + " 天后" : "已过 " + (-days) + " 天";
-        return "● " + event.title + " · " + event.type + time + "\n"
-                + event.displayDate(next) + " · " + countdown;
+        String time = event.timeLabel().isEmpty() ? "" : " " + event.timeLabel();
+        String countdown = event.isOverdue() ? "已过期" : days == 0 ? "今天" : days > 0 ? days + "天后" : "已过" + (-days) + "天";
+        return event.type + "·" + event.displayDate(next) + time + "·" + countdown;
     }
 
     /** 把设置中一至五级转换为数组使用的零至四下标。 */
@@ -144,6 +164,17 @@ public final class CalendarWidgetProvider extends AppWidgetProvider {
 
     /** 返回设置级别对应的事项字号，让列表服务和组件顶部保持同一档设置。 */
     static float eventTextSize(int level) { return EVENT_SIZES[levelIndex(level)]; }
+
+    /** 创建由小组件点击触发的页面入口，并兼容安卓十五的后台页面启动规则。 */
+    private static PendingIntent activityPendingIntent(Context context, int requestCode, Intent intent, int flags) {
+        Bundle options = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            ActivityOptions activityOptions = ActivityOptions.makeBasic();
+            activityOptions.setPendingIntentCreatorBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED);
+            options = activityOptions.toBundle();
+        }
+        return PendingIntent.getActivity(context, requestCode, intent, flags, options);
+    }
 
     /** 按“法定假日、节气、普通节日”的优先顺序生成小组件顶部的今日标签。 */
     private static String specialDateLabel(Context context, SharedPreferences preferences, LocalDate today) {

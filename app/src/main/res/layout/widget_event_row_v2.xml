@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 保留旧布局资源以区分历史缓存；实际事项改用二代布局。 -->
 <!-- 两个独立单行控件，保证名称再长也不会挤掉日期、时间和倒计时。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_item_root"

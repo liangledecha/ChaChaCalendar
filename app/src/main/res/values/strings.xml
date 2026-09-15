@@ -5,6 +5,7 @@
     <string name="widget_description">时钟、天气入口与今天需要显示的日程和待办</string>
     <!-- 小组件布局中的固定文字，集中存放便于后续翻译和无障碍检查。 -->
     <string name="widget_refresh">↻</string>
+    <string name="widget_add">＋</string>
     <string name="widget_weather_default">天气 · 打开系统天气</string>
     <string name="widget_empty">今天暂无需要显示的事项</string>
 </resources>

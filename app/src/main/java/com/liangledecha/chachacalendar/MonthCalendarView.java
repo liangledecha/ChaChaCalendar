@@ -66,6 +66,8 @@ public final class MonthCalendarView extends View {
     private long marqueeStart = SystemClock.uptimeMillis();
     /** 本帧是否存在需要滚动的标签；用于只安排一次下一帧重绘。 */
     private boolean marqueeNeeded;
+    /** 当前主题主色，由主页面设置并用于选中圆圈和事项标记。 */
+    private int accent = Color.rgb(95, 143, 105);
     /** 主页面注册的回调监听器。 */
     private Listener listener;
 
@@ -82,6 +84,8 @@ public final class MonthCalendarView extends View {
     public void setShowWeekNumbers(boolean show) { showWeekNumbers = show; invalidate(); }
     /** 修改农历显示开关并立即重绘，不改变任何事项自身使用的日期制。 */
     public void setShowLunarDates(boolean show) { showLunarDates = show; invalidate(); }
+    /** 应用用户选择的主题主色。 */
+    public void setAccent(int color) { accent = color; invalidate(); }
     /** 更换当前网格的节日、假日和节气标签。 */
     public void setCulturalLabels(Map<LocalDate, String> labels) {
         culturalLabelMap.clear(); if (labels != null) culturalLabelMap.putAll(labels); invalidate();
@@ -233,10 +237,10 @@ public final class MonthCalendarView extends View {
         boolean isSelected = date.equals(selected);
         boolean isToday = date.equals(LocalDate.now());
         if (isSelected) {
-            paint.setColor(Color.rgb(82,110,240));
+            paint.setColor(accent);
             c.drawCircle(cx, top + dp(25), dp(22), paint);
         } else if (isToday) {
-            paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(1.5f)); paint.setColor(Color.rgb(82,110,240));
+            paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(1.5f)); paint.setColor(accent);
             c.drawCircle(cx, top + dp(25), dp(21), paint); paint.setStyle(Paint.Style.FILL);
         }
         paint.setTextAlign(Paint.Align.CENTER); paint.setTextSize(sp(renderedMode == Mode.EXPANDED ? 17 : 18));
@@ -247,7 +251,7 @@ public final class MonthCalendarView extends View {
         if (hasSubLine) {
             // 节日、假日和节气优先占用副行；没有特殊标签时才显示普通农历日号。
             paint.setTextSize(sp(8));
-            if (isSelected) paint.setColor(Color.rgb(232,236,255));
+            if (isSelected) paint.setColor(Color.WHITE);
             else if (culturalLabel != null && culturalLabel.startsWith("休·")) paint.setColor(Color.rgb(224,73,86));
             else if (culturalLabel != null && culturalLabel.startsWith("班·")) paint.setColor(Color.rgb(224,139,52));
             else if (culturalLabel != null) paint.setColor(Color.rgb(73,101,210));
@@ -260,14 +264,14 @@ public final class MonthCalendarView extends View {
             int max = Math.min(2, events.size());
             for (int i = 0; i < max; i++) {
                 float y = top + dp((hasSubLine ? 43 : 39) + i * 18);
-                paint.setColor(events.get(i).type.equals("待办") ? Color.rgb(235,159,68) : Color.rgb(108,128,229));
+                paint.setColor(events.get(i).type.equals("待办") ? Color.rgb(235,159,68) : accent);
                 c.drawRoundRect(new RectF(left + dp(3), y, left + width - dp(3), y + dp(15)), dp(4), dp(4), paint);
                 paint.setColor(Color.WHITE); paint.setTextSize(sp(8)); paint.setTextAlign(Paint.Align.LEFT);
                 drawMarqueeLabel(c, events.get(i).title, left + dp(6), y, width - dp(12));
             }
         } else if (!events.isEmpty()) {
             // 小蓝点放在选中圆或今天边框下方，避免与两种圆形状态重叠；圆形状态也保留日程提示。
-            paint.setColor(isSelected ? Color.rgb(82,110,240) : Color.rgb(82,110,240));
+            paint.setColor(accent);
             c.drawCircle(cx, top + Math.min(height - dp(4), dp(hasSubLine ? 51 : 47)), dp(2.2f), paint);
         }
     }

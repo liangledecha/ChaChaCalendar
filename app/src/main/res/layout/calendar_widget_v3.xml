@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 保留旧资源编号供已安装桌面识别升级；运行时使用新的二代布局，不再复用此树。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
     android:layout_width="match_parent"
@@ -8,7 +7,7 @@
     android:orientation="vertical"
     android:padding="14dp">
 
-    <!-- 顶栏同时显示自动更新的系统时钟、今天日期和手动刷新按钮。 -->
+    <!-- 顶栏显示系统时钟、日期、可选刷新按钮和快捷新增按钮。 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -39,6 +38,14 @@
             android:text="@string/widget_refresh"
             android:textColor="@color/ink"
             android:textSize="24sp" />
+        <TextView
+            android:id="@+id/widget_add"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:gravity="center"
+            android:text="@string/widget_add"
+            android:textColor="@color/ink"
+            android:textSize="26sp" />
     </LinearLayout>
 
     <!-- 天气仍然只提供手机系统天气入口，不引入新的联网来源。 -->

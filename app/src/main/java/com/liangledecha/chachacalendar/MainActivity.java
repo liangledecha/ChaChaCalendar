@@ -19,6 +19,8 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.text.TextUtils;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -34,6 +36,7 @@ import android.widget.ListView;
 import android.widget.NumberPicker;
 import android.widget.PopupMenu;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -64,10 +67,14 @@ public final class MainActivity extends Activity {
     static final String EXTRA_OPEN_AGENDA = "打开日程页";
     /** 小组件事项行通过此参数告诉主页面需要定位和查看的数据库编号。 */
     static final String EXTRA_EVENT_ID = "事项编号";
+    /** 小组件加号通过此参数直接复用应用内的新建日程表单。 */
+    static final String EXTRA_OPEN_CREATE = "快捷新建日程";
     /** 主内容区当前页面类型。日程和待办共用事项列表，通过额外开关区分。 */
     private enum Section { YEAR, MONTH, AGENDA }
-    /** 全应用主蓝色，供选中状态、圆形按钮和强调文字使用。 */
-    private final int accent = Color.rgb(82, 110, 240);
+    /** 默认低饱和护眼绿；用户可在显示设置中改为任意颜色。 */
+    private static final int DEFAULT_ACCENT = Color.rgb(95, 143, 105);
+    /** 当前全应用主色，供选中状态、圆形按钮和强调文字使用。 */
+    private int accent = DEFAULT_ACCENT;
     /** 本地日程数据库入口。 */
     private EventStore store;
     /** 三态月历控件。 */
@@ -115,9 +122,10 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         store = new EventStore(this);
         prefs = getSharedPreferences("settings", MODE_PRIVATE);
+        accent = prefs.getInt("theme_accent", DEFAULT_ACCENT);
         seedSamplesIfEmpty();
         getWindow().setStatusBarColor(Color.TRANSPARENT);
-        getWindow().setNavigationBarColor(Color.rgb(248, 249, 252));
+        getWindow().setNavigationBarColor(tint(accent, .04f));
         View content = buildUi();
         content.setOnApplyWindowInsetsListener((view, insets) -> {
             view.setPadding(0, insets.getSystemWindowInsetTop(), 0, insets.getSystemWindowInsetBottom());
@@ -138,7 +146,14 @@ public final class MainActivity extends Activity {
 
     /** 识别小组件入口参数；普通桌面图标启动仍保持进入月历。 */
     private void openRequestedSection(Intent intent) {
-        if (intent == null || !intent.getBooleanExtra(EXTRA_OPEN_AGENDA, false)) return;
+        if (intent == null) return;
+        if (intent.getBooleanExtra(EXTRA_OPEN_CREATE, false)) {
+            // 消费入口参数，避免屏幕旋转或页面复用时重复弹出新建窗口。
+            intent.removeExtra(EXTRA_OPEN_CREATE);
+            showEventDialog(null);
+            return;
+        }
+        if (!intent.getBooleanExtra(EXTRA_OPEN_AGENDA, false)) return;
         todosOnly = false;
         switchSection(Section.AGENDA);
         updateTabStyles();
@@ -180,7 +195,7 @@ public final class MainActivity extends Activity {
     private View buildUi() {
         // 第一步：创建覆盖全屏的根容器，并设置全应用浅色背景。
         FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(Color.rgb(248, 249, 252));
+        root.setBackgroundColor(tint(accent, .04f));
         LinearLayout page = new LinearLayout(this); page.setOrientation(LinearLayout.VERTICAL);
         page.setPadding(dp(16), dp(10), dp(16), dp(8));
         FrameLayout.LayoutParams pageParams = new FrameLayout.LayoutParams(-1, -1);
@@ -206,6 +221,7 @@ public final class MainActivity extends Activity {
 
         // 第四步：加入全年总览。默认隐藏，点击“年”后占据主要内容空间。
         yearCalendar = new YearCalendarView(this);
+        yearCalendar.setAccent(accent);
         yearCalendar.setVisibility(View.GONE);
         yearCalendar.setListener(new YearCalendarView.Listener() {
             @Override public void onYearChanged(int year) { updateTitle(); }
@@ -217,6 +233,7 @@ public final class MainActivity extends Activity {
 
         // 第五步：加入三态月历，并把日期、状态和月份变化回调连接到页面刷新逻辑。
         calendar = new MonthCalendarView(this);
+        calendar.setAccent(accent);
         calendar.setShowWeekNumbers(prefs.getBoolean("week_numbers", true));
         calendar.setShowLunarDates(prefs.getBoolean("show_lunar_dates", true));
         calendar.setListener(new MonthCalendarView.Listener() {
@@ -239,7 +256,7 @@ public final class MainActivity extends Activity {
         summary = text("", 15, Color.rgb(38,45,62), true); summary.setGravity(Gravity.CENTER_VERTICAL);
         lowerPanel.addView(summary, new LinearLayout.LayoutParams(-1, dp(42)));
         list = new ListView(this); list.setDividerHeight(0); list.setSelector(android.R.color.transparent);
-        adapter = new EventAdapter(this, new ArrayList<>(), this::toggleTodo); list.setAdapter(adapter);
+        adapter = new EventAdapter(this, new ArrayList<>(), this::toggleTodo, accent); list.setAdapter(adapter);
         list.setOnItemClickListener((p, v, pos, id) -> showEventDetails(adapter.getItem(pos)));
         list.setOnItemLongClickListener((p, v, pos, id) -> { confirmDelete(adapter.getItem(pos)); return true; });
         list.setOnScrollListener(new AbsListView.OnScrollListener() {
@@ -280,7 +297,7 @@ public final class MainActivity extends Activity {
     /** 创建底部文字导航按钮，并根据是否选中设置初始样式。 */
     private TextView bottomItem(String label, boolean selected) {
         TextView item = text(label, 14, selected ? accent : Color.rgb(82,89,106), selected); item.setGravity(Gravity.CENTER);
-        GradientDrawable bg = new GradientDrawable(); bg.setColor(selected ? Color.rgb(238,241,255) : Color.TRANSPARENT); bg.setCornerRadius(dp(18)); item.setBackground(bg); return item;
+        GradientDrawable bg = new GradientDrawable(); bg.setColor(selected ? tint(accent, .12f) : Color.TRANSPARENT); bg.setCornerRadius(dp(18)); item.setBackground(bg); return item;
     }
 
     /** 创建底部“今”或加号使用的蓝色圆形按钮。 */
@@ -338,7 +355,7 @@ public final class MainActivity extends Activity {
     /** 设置一个底部文字按钮的颜色、字重和圆角选中背景。 */
     private void styleBottom(TextView item, boolean selected) {
         item.setTextColor(selected ? accent : Color.rgb(82,89,106)); item.setTypeface(Typeface.DEFAULT, selected ? Typeface.BOLD : Typeface.NORMAL);
-        GradientDrawable bg = new GradientDrawable(); bg.setColor(selected ? Color.rgb(238,241,255) : Color.TRANSPARENT); bg.setCornerRadius(dp(18)); item.setBackground(bg);
+        GradientDrawable bg = new GradientDrawable(); bg.setColor(selected ? tint(accent, .12f) : Color.TRANSPARENT); bg.setCornerRadius(dp(18)); item.setBackground(bg);
     }
 
     /** 根据年、月、日程或待办页面生成顶部标题。 */
@@ -538,8 +555,12 @@ public final class MainActivity extends Activity {
             int color = (int) animation.getAnimatedValue();
             if (row.getBackground() instanceof GradientDrawable) ((GradientDrawable) row.getBackground()).setColor(color);
             boolean bluePhase = Color.red(color) < 180;
-            ((TextView) rowLayout.getChildAt(1)).setTextColor(bluePhase ? Color.WHITE : Color.rgb(25,28,35));
-            ((TextView) rowLayout.getChildAt(2)).setTextColor(bluePhase ? Color.WHITE : Color.rgb(73,91,174));
+            // 名称、日期、规则现为三个独立文字控件，定位闪烁时必须一起着色。
+            LinearLayout information = (LinearLayout) rowLayout.getChildAt(1);
+            for (int i = 0; i < information.getChildCount(); i++) {
+                ((TextView) information.getChildAt(i)).setTextColor(bluePhase ? Color.WHITE : Color.rgb(25,28,35));
+            }
+            ((TextView) rowLayout.getChildAt(2)).setTextColor(bluePhase ? Color.WHITE : accent);
         });
         flash.addListener(new AnimatorListenerAdapter() {
             @Override public void onAnimationEnd(Animator animation) {
@@ -731,16 +752,18 @@ public final class MainActivity extends Activity {
     /** 显示周数、农历、小组件背景和字号设置，并把结果持久化。 */
     private void showSettings() {
         LinearLayout settings = new LinearLayout(this); settings.setOrientation(LinearLayout.VERTICAL); settings.setPadding(dp(18), dp(8), dp(18), 0);
-        Switch weeks = new Switch(this); weeks.setText("在最左侧显示这是今年第几周"); weeks.setChecked(prefs.getBoolean("week_numbers", true)); weeks.setPadding(dp(6), dp(10), dp(6), dp(10));
-        settings.addView(weeks, new LinearLayout.LayoutParams(-1, dp(58)));
-        Switch lunar = new Switch(this); lunar.setText("在月历日期格中显示农历"); lunar.setChecked(prefs.getBoolean("show_lunar_dates", true)); lunar.setPadding(dp(6), dp(6), dp(6), dp(6));
+        Switch weeks = settingsSwitch("在最左侧显示这是今年第几周", prefs.getBoolean("week_numbers", true));
+        settings.addView(weeks, new LinearLayout.LayoutParams(-1, dp(54)));
+        Switch lunar = settingsSwitch("在月历日期格中显示农历", prefs.getBoolean("show_lunar_dates", true));
         settings.addView(lunar, new LinearLayout.LayoutParams(-1, dp(54)));
-        Switch festivals = new Switch(this); festivals.setText("显示传统节日和常用节日"); festivals.setChecked(prefs.getBoolean("show_festivals", true));
-        Switch holidays = new Switch(this); holidays.setText("显示法定放假与补班（联网更新）"); holidays.setChecked(prefs.getBoolean("show_public_holidays", true));
-        Switch terms = new Switch(this); terms.setText("显示二十四节气"); terms.setChecked(prefs.getBoolean("show_solar_terms", true));
+        Switch festivals = settingsSwitch("显示传统节日和常用节日", prefs.getBoolean("show_festivals", true));
+        Switch holidays = settingsSwitch("显示法定放假与补班（联网更新）", prefs.getBoolean("show_public_holidays", true));
+        Switch terms = settingsSwitch("显示二十四节气", prefs.getBoolean("show_solar_terms", true));
         settings.addView(festivals, new LinearLayout.LayoutParams(-1, dp(50)));
         settings.addView(holidays, new LinearLayout.LayoutParams(-1, dp(50)));
         settings.addView(terms, new LinearLayout.LayoutParams(-1, dp(50)));
+        Switch widgetRefresh = settingsSwitch("显示小组件刷新按钮", prefs.getBoolean("show_widget_refresh", false));
+        settings.addView(widgetRefresh, new LinearLayout.LayoutParams(-1, dp(50)));
         Button updateHolidays = new Button(this); updateHolidays.setAllCaps(false); updateHolidays.setText("立即更新今年法定节假日");
         updateHolidays.setOnClickListener(v -> requestHolidayUpdate(LocalDate.now().getYear(), true, true));
         settings.addView(updateHolidays, new LinearLayout.LayoutParams(-1, dp(48)));
@@ -757,6 +780,21 @@ public final class MainActivity extends Activity {
         Spinner eventFont = spinner(fontLevels); eventFont.setSelection(Math.max(0, Math.min(4, prefs.getInt("widget_event_font_level", 1) - 1)));
         settings.addView(labeled("顶部时间日期", headerFont));
         settings.addView(labeled("下方事项文字", eventFont));
+        TextView colorNote = text("整体配色（圆盘选色）", 14, Color.rgb(60,68,86), true);
+        settings.addView(colorNote, new LinearLayout.LayoutParams(-1, dp(34)));
+        ColorWheelView wheel = new ColorWheelView(this); wheel.setColor(accent);
+        TextView colorPreview = text("当前配色", 13, Color.WHITE, true); colorPreview.setGravity(Gravity.CENTER);
+        GradientDrawable previewBackground = new GradientDrawable(); previewBackground.setCornerRadius(dp(14)); previewBackground.setColor(accent); colorPreview.setBackground(previewBackground);
+        wheel.setListener(color -> previewBackground.setColor(color));
+        settings.addView(wheel, new LinearLayout.LayoutParams(-1, dp(180)));
+        SeekBar brightness = new SeekBar(this); brightness.setMax(85); brightness.setProgress(Math.round((wheel.getValue() - .15f) * 100));
+        brightness.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar bar, int progress, boolean user) { wheel.setValue(.15f + progress / 100f); }
+            @Override public void onStartTrackingTouch(SeekBar bar) { }
+            @Override public void onStopTrackingTouch(SeekBar bar) { }
+        });
+        settings.addView(brightness, new LinearLayout.LayoutParams(-1, dp(38)));
+        settings.addView(colorPreview, new LinearLayout.LayoutParams(-1, dp(42)));
         TextView powerNote = text("透明度仅在组件刷新时选择背景资源，不增加后台刷新频率。", 12, Color.rgb(105,112,128), false);
         settings.addView(powerNote, new LinearLayout.LayoutParams(-1, dp(42)));
         // 设置项较多时放进滚动容器，避免小屏手机底部选项和确认按钮被截断。
@@ -767,9 +805,11 @@ public final class MainActivity extends Activity {
                     .putBoolean("show_solar_terms", terms.isChecked())
                     .putInt("widget_transparency", transparencyValues[transparency.getSelectedItemPosition()])
                     .putInt("widget_header_font_level", headerFont.getSelectedItemPosition() + 1)
-                    .putInt("widget_event_font_level", eventFont.getSelectedItemPosition() + 1).apply();
+                    .putInt("widget_event_font_level", eventFont.getSelectedItemPosition() + 1)
+                    .putBoolean("show_widget_refresh", widgetRefresh.isChecked())
+                    .putInt("theme_accent", wheel.getColor()).apply();
             calendar.setShowWeekNumbers(weeks.isChecked()); calendar.setShowLunarDates(lunar.isChecked());
-            refreshCalendarCulture(); if (holidays.isChecked()) requestHolidayUpdate(calendar.getMonth().getYear(), false, false); updateWidgets();
+            refreshCalendarCulture(); if (holidays.isChecked()) requestHolidayUpdate(calendar.getMonth().getYear(), false, false); updateWidgets(); recreate();
         }).show();
     }
 
@@ -890,8 +930,16 @@ public final class MainActivity extends Activity {
     /** 创建左侧标签、右侧输入控件的等高表单行，保证视觉对齐。 */
     private LinearLayout labeled(String label, View control) {
         LinearLayout row = new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL); row.setBaselineAligned(false);
-        TextView name = text(label, 13, Color.rgb(96,103,120), false); name.setGravity(Gravity.CENTER_VERTICAL); row.addView(name, new LinearLayout.LayoutParams(dp(118), dp(54)));
+        TextView name = text(label, 13, Color.rgb(96,103,120), false); name.setGravity(Gravity.CENTER_VERTICAL);
+        if (control instanceof TextView) ((TextView) control).setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(name, new LinearLayout.LayoutParams(dp(118), dp(54)));
         row.addView(control, new LinearLayout.LayoutParams(0, dp(54), 1)); return row;
+    }
+
+    /** 创建文本与右侧开关垂直居中的统一设置行。 */
+    private Switch settingsSwitch(String label, boolean checked) {
+        Switch value = new Switch(this); value.setText(label); value.setChecked(checked);
+        value.setGravity(Gravity.CENTER_VERTICAL); value.setPadding(dp(6), 0, dp(6), 0); return value;
     }
 
     /** 创建带下拉选项的选择控件。 */
@@ -902,6 +950,10 @@ public final class MainActivity extends Activity {
     private TextView text(String value, float size, int color, boolean bold) { TextView t = new TextView(this); t.setText(value); t.setTextSize(size); t.setTextColor(color); if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD); return t; }
     /** 把与屏幕密度无关的尺寸转换为实际像素。 */
     private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
+    /** 把主色与白色混合，生成护眼的浅背景和选中底色。 */
+    private int tint(int color, float amount) {
+        return Color.rgb(Math.round(255 - (255 - Color.red(color)) * amount), Math.round(255 - (255 - Color.green(color)) * amount), Math.round(255 - (255 - Color.blue(color)) * amount));
+    }
     /** 把日期转换为完整中文年月日。 */
     private String formatDate(LocalDate d) { return d.getYear() + "年" + d.getMonthValue() + "月" + d.getDayOfMonth() + "日"; }
     /** 同时显示农历设定和本次对应的公历落点，帮助用户在保存前核对日期。 */
@@ -972,6 +1024,8 @@ public final class MainActivity extends Activity {
      * 每一行左侧显示名称、重复规则、日期、类型和提前显示规则，右侧显示倒计时。
      */
     private static final class EventAdapter extends ArrayAdapter<Event> {
+        /** 当前主题主色；换色保存后会重建页面和适配器。 */
+        private final int accent;
         /** 待办勾选状态变化时通知主页面更新数据库和系统日历。 */
         interface CompletionListener { void onChanged(Event event, boolean completed); }
         /** 创建文字和尺寸时需要的页面对象。 */
@@ -983,8 +1037,8 @@ public final class MainActivity extends Activity {
         /** 为真时显示待办选择框；普通日程和月历下半区不显示。 */
         private boolean todoMode;
         /** 创建适配器并交给父类管理初始数据。 */
-        EventAdapter(Activity a, List<Event> e, CompletionListener listener) {
-            super(a, android.R.layout.simple_list_item_1, e); activity = a; completionListener = listener;
+        EventAdapter(Activity a, List<Event> e, CompletionListener listener, int accent) {
+            super(a, android.R.layout.simple_list_item_1, e); activity = a; completionListener = listener; this.accent = accent;
         }
         /** 切换待办专用行样式，并要求列表立即重绘。 */
         void setTodoMode(boolean enabled) { todoMode = enabled; notifyDataSetChanged(); }
@@ -997,19 +1051,25 @@ public final class MainActivity extends Activity {
             // 动画用数据库编号确认当前视图是否仍代表原事项，避免滚动复用后闪到其他行。
             row.setTag(e.id);
             CheckBox completed = (CheckBox) row.getChildAt(0);
-            TextView title = (TextView) row.getChildAt(1); TextView countdown = (TextView) row.getChildAt(2);
+            LinearLayout information = (LinearLayout) row.getChildAt(1);
+            TextView title = (TextView) information.getChildAt(0);
+            TextView date = (TextView) information.getChildAt(1);
+            TextView rules = (TextView) information.getChildAt(2);
+            TextView countdown = (TextView) row.getChildAt(2);
             completed.setOnCheckedChangeListener(null);
             completed.setVisibility(todoMode && e.isTodo() ? View.VISIBLE : View.GONE);
             completed.setChecked(e.completed);
             completed.setOnCheckedChangeListener((button, checked) -> completionListener.onChanged(e, checked));
             String timePart = e.timeLabel().isEmpty() ? "" : "  " + e.timeLabel();
             boolean overdue = e.isTodo() && !e.completed && e.isOverdue();
-            String overduePart = overdue ? "  ·  已过期" : "";
-            title.setText(String.format(Locale.CHINA, "%s  ·  %s%s\n%s%s  ·  %s  ·  %s",
-                    e.title, e.repeatLabel(), overduePart, e.displayDate(next), timePart, e.type, e.visibilityLabel()));
+            // 第一行只放名称，复用行时复位滚动，防止沿用上一条事项的滚动位置。
+            title.setSelected(false); title.setText(e.title); title.setSelected(true);
+            date.setText(e.displayDate(next) + timePart);
+            rules.setText(e.repeatLabel() + "·" + e.type + "·" + e.visibilityLabel());
             countdown.setText(overdue ? "已过期" : days == 0 ? (e.timeLabel().isEmpty() ? "今天" : e.timeLabel()) : days > 0 ? days + " 天后" : "已过 " + (-days) + " 天");
             int mainColor = e.completed ? Color.rgb(145,148,156) : overdue ? Color.rgb(210,55,67) : Color.rgb(25,28,35);
-            title.setTextColor(mainColor); countdown.setTextColor(e.completed ? mainColor : overdue ? Color.rgb(210,55,67) : Color.rgb(73,91,174));
+            title.setTextColor(mainColor); date.setTextColor(mainColor); rules.setTextColor(mainColor);
+            countdown.setTextColor(e.completed ? mainColor : overdue ? Color.rgb(210,55,67) : accent);
             row.setAlpha(e.completed ? .68f : 1f);
             GradientDrawable background = new GradientDrawable(); background.setColor(e.completed ? Color.rgb(237,238,241) : Color.WHITE);
             background.setCornerRadius(dp(16)); background.setStroke(dp(1), Color.rgb(225,227,234)); row.setBackground(background);
@@ -1020,13 +1080,28 @@ public final class MainActivity extends Activity {
             LinearLayout row = new LinearLayout(activity); row.setGravity(Gravity.CENTER_VERTICAL); row.setPadding(dp(16), dp(8), dp(16), dp(8));
             GradientDrawable bg = new GradientDrawable(); bg.setColor(Color.WHITE); bg.setCornerRadius(dp(16)); bg.setStroke(dp(1), Color.rgb(233,235,242)); row.setBackground(bg);
             LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, dp(82)); rp.setMargins(0, dp(4), 0, dp(4)); row.setLayoutParams(rp);
-            CheckBox box = new CheckBox(activity); box.setButtonTintList(android.content.res.ColorStateList.valueOf(Color.rgb(82,110,240)));
+            CheckBox box = new CheckBox(activity); box.setButtonTintList(android.content.res.ColorStateList.valueOf(accent));
             // 不抢占列表行焦点：点选择框正常勾选，点行内其他位置查看详情，长按仍触发删除。
             box.setFocusable(false); box.setFocusableInTouchMode(false); box.setClickable(true);
             row.addView(box, new LinearLayout.LayoutParams(dp(42), -1));
-            TextView t = new TextView(activity); t.setTextSize(16); t.setTextColor(Color.rgb(25,28,35)); t.setTypeface(Typeface.DEFAULT, Typeface.BOLD); t.setGravity(Gravity.CENTER_VERTICAL); t.setLineSpacing(0,1.15f);
-            row.addView(t, new LinearLayout.LayoutParams(0,-1,1));
-            TextView c = new TextView(activity); c.setTextSize(18); c.setTextColor(Color.rgb(73,91,174)); c.setTypeface(Typeface.DEFAULT,Typeface.BOLD); c.setGravity(Gravity.CENTER);
+            // 保留八十二单位卡片高度、外观和右侧倒计时，只把左侧可用空间拆成三行。
+            LinearLayout information = new LinearLayout(activity); information.setOrientation(LinearLayout.VERTICAL);
+            row.addView(information, new LinearLayout.LayoutParams(0, -1, 1));
+            TextView title = new TextView(activity); title.setGravity(Gravity.CENTER_VERTICAL); title.setIncludeFontPadding(false);
+            title.setTextSize(Math.min(16f, dp(21) / activity.getResources().getDisplayMetrics().scaledDensity));
+            title.setTypeface(Typeface.DEFAULT, Typeface.BOLD); title.setSingleLine(true);
+            // 原生跑马灯仅在文字溢出且控件可见时绘制；失去窗口焦点或离屏由系统停止。
+            title.setEllipsize(TextUtils.TruncateAt.MARQUEE); title.setMarqueeRepeatLimit(-1);
+            title.setFocusable(false); title.setClickable(false); title.setLongClickable(false);
+            information.addView(title, new LinearLayout.LayoutParams(-1, 0, 24));
+            for (int i = 0; i < 2; i++) {
+                TextView detail = new TextView(activity); detail.setGravity(Gravity.CENTER_VERTICAL); detail.setIncludeFontPadding(false);
+                detail.setMaxLines(1); detail.setEllipsize(TextUtils.TruncateAt.END);
+                // 日期和规则以十三号字为上限，按实际行宽缩小，避免挤占名称或待办勾选框。
+                detail.setAutoSizeTextTypeUniformWithConfiguration(9, 13, 1, TypedValue.COMPLEX_UNIT_SP);
+                information.addView(detail, new LinearLayout.LayoutParams(-1, 0, 21));
+            }
+            TextView c = new TextView(activity); c.setTextSize(18); c.setTextColor(accent); c.setTypeface(Typeface.DEFAULT,Typeface.BOLD); c.setGravity(Gravity.CENTER);
             row.addView(c, new LinearLayout.LayoutParams(dp(86),-1)); return row;
         }
         /** 把与屏幕密度无关的尺寸转换为实际像素。 */

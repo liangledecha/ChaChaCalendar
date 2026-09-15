@@ -41,6 +41,8 @@
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
                 <action android:name="android.intent.action.DATE_CHANGED" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <!-- 覆盖安装后主动重建桌面布局和点击绑定，包括展示版本号未变化的更新。 -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
             <!-- 指向小组件尺寸、布局和刷新策略配置。 -->
             <meta-data
