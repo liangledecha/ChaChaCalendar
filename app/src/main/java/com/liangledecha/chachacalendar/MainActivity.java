@@ -132,6 +132,8 @@ public final class MainActivity extends Activity {
     private GitHubReleaseChecker.Release pendingRelease;
     /** 防止快速切换前后台时并发发出相同版本请求。 */
     private boolean checkingRelease;
+    /** 自动检查尚未结束时新打开的“关于”版本文字，待同一次请求完成后统一更新。 */
+    private TextView waitingReleaseLabel;
 
     /**
      * 页面创建入口。
@@ -878,12 +880,15 @@ public final class MainActivity extends Activity {
 
     /** 请求最新版本；自动检查尊重“跳过此版本”，手动检查仍会报告该版本。 */
     private void checkForUpdates(boolean manual, TextView latestLabel) {
+        if (latestLabel != null) waitingReleaseLabel = latestLabel;
         if (checkingRelease) return;
         checkingRelease = true;
         if (latestLabel != null) latestLabel.setText("最新版本：正在检测…");
         GitHubReleaseChecker.check(this, (release, error) -> {
             checkingRelease = false;
-            if (latestLabel != null) latestLabel.setText(release == null ? "最新版本：检测失败" :
+            TextView label = latestLabel != null ? latestLabel : waitingReleaseLabel;
+            waitingReleaseLabel = null;
+            if (label != null) label.setText(release == null ? "最新版本：检测失败" :
                     "最新版本：" + release.version + (error == null ? "" : "（缓存）"));
             if (release == null) {
                 if (manual) Toast.makeText(this, "暂时无法连接 GitHub，请稍后重试", Toast.LENGTH_LONG).show();
