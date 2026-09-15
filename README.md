@@ -6,4 +6,4 @@
 
 应用包名：`com.liangledecha.chachacalendar`
 
-源码目录包含应用 Java 源码、Android 资源、Manifest 和测试代码。
+源码目录包含应用 Java 源码、Android 资源、Manifest 和测试代码；第三方许可说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
