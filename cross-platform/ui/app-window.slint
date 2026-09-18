@@ -1,0 +1,57 @@
+import { Button, VerticalBox, HorizontalBox, LineEdit, ListView } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "茶茶日历";
+    preferred-width: 900px;
+    preferred-height: 640px;
+
+    in-out property <string> status-text: "离线可用";
+
+    VerticalBox {
+        padding: 16px;
+        spacing: 12px;
+
+        HorizontalBox {
+            spacing: 8px;
+            Text {
+                text: "茶茶日历";
+                font-size: 24px;
+                font-weight: 700;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: root.status-text;
+                vertical-alignment: center;
+            }
+            Button { text: "同步"; }
+        }
+
+        Rectangle {
+            border-width: 1px;
+            border-color: #d8dce3;
+            border-radius: 10px;
+            VerticalBox {
+                padding: 16px;
+                spacing: 8px;
+                Text { text: "跨端客户端第一阶段"; font-size: 20px; }
+                Text {
+                    text: "当前已建立共享事件模型、逻辑时钟和确定性合并算法。下一步接 SQLite 与 WebDAV 条件同步。";
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            border-width: 1px;
+            border-color: #e2e5ea;
+            border-radius: 10px;
+            Text {
+                text: "这里将复用 Android 的“上方日历 + 下方长期事项”交互，而不是做成无限长页面。";
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
