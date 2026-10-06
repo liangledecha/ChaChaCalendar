@@ -5,6 +5,12 @@
     <!-- 读取可用日历账户并写入事件和提醒，让系统日历负责跨厂商通知。 -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+    <!-- 日历类应用的本机到点提醒；未授权通知时日程仍正常保存。 -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- 声明可能被自动探测的厂商天气应用，使安卓十一及以上允许查询这些包。 -->
     <queries>
         <package android:name="com.huawei.android.totemweather" />
@@ -23,6 +29,7 @@
         android:label="@string/app_name"
         android:roundIcon="@drawable/ic_app"
         android:supportsRtl="true"
+        android:networkSecurityConfig="@xml/network_security"
         android:theme="@style/AppTheme">
         <!-- 主页面是桌面图标启动的入口。相对类名会自动拼接当前应用包名。 -->
         <activity
@@ -48,6 +55,14 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/calendar_widget_info" />
+        </receiver>
+        <receiver android:name=".LocalReminder" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
         </receiver>
         <!-- 为桌面小组件的可滚动事项列表提供远程行视图；只有安卓系统能够绑定。 -->
         <service

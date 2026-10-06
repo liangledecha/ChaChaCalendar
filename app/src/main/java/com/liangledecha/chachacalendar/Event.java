@@ -71,7 +71,7 @@ public final class Event {
         if (supportsPlanning() && plannedStart != null && plannedEnd != null && !plannedEnd.isBefore(plannedStart)) {
             this.plannedStart = plannedStart; this.plannedEnd = plannedEnd;
         }
-        this.completed = "待办".equals(type) && completed;
+        this.completed = supportsCompletion() && completed;
         this.systemEventId = systemEventId;
         this.lunarBased = lunarBased;
         this.lunarMonth = lunarBased ? lunarMonth : 0;
@@ -91,11 +91,57 @@ public final class Event {
      * @return 普通事项返回不早于基准日期的下一次；未完成待办返回当前尚未办结的周期
      */
     public LocalDate nextDate(LocalDate anchor) {
+        return nextDateAt(anchor, LocalDate.now());
+    }
+
+    LocalDate nextDateAt(LocalDate anchor, LocalDate today) {
         // 重复待办必须停在当前未完成周期；只有勾选后才从刚完成日期的下一天寻找下一周期。
-        if (isTodo() && !NONE.equals(repeatRule)) {
-            return completedThrough == null ? date : nextDateIgnoringCompletion(completedThrough.plusDays(1));
+        if (supportsCompletion() && !NONE.equals(repeatRule)) {
+            return completedThrough == null ? date : !completedThrough.isBefore(today)
+                    ? completedThrough : nextDateIgnoringCompletion(completedThrough.plusDays(1));
         }
         return nextDateIgnoringCompletion(anchor);
+    }
+
+    public boolean isCompletedOn(LocalDate today) {
+        return supportsCompletion() && (NONE.equals(repeatRule) ? completed
+                : completedThrough != null && !completedThrough.isBefore(today));
+    }
+
+    public LocalDate nextReminderDate(LocalDate today) {
+        return supportsCompletion() && !NONE.equals(repeatRule) && completedThrough != null
+                ? nextDateIgnoringCompletion(completedThrough.plusDays(1)) : nextDate(today);
+    }
+
+    /** 下一次本机通知时刻；全天事项在上午九点提醒，已过期的未完成待办不跳到未来周期。 */
+    public LocalDateTime nextLocalReminder(LocalDateTime now) {
+        if (supportsCompletion() && NONE.equals(repeatRule) && completed) return null;
+        LocalTime reminderTime = time == null ? LocalTime.of(9, 0) : time;
+        LocalDate occurrence = nextReminderDate(now.toLocalDate());
+        LocalDateTime next = LocalDateTime.of(occurrence, reminderTime);
+        if (next.isAfter(now)) return next;
+        if (supportsCompletion() || NONE.equals(repeatRule)) return null;
+        next = LocalDateTime.of(nextReminderDate(now.toLocalDate().plusDays(1)), reminderTime);
+        return next.isAfter(now) ? next : null;
+    }
+
+    public boolean setOccurrenceCompleted(LocalDate expected, boolean value, LocalDate today) {
+        if (!supportsCompletion() || isCompletedOn(today) == value || !nextDateAt(today, today).equals(expected)) return false;
+        if (NONE.equals(repeatRule)) completed = value;
+        else if (value) completedThrough = expected;
+        else {
+            completedThrough = null;
+            if (expected.isAfter(date)) {
+                long low = 0, high = ChronoUnit.DAYS.between(date, expected);
+                while (low + 1 < high) {
+                    long mid = (low + high) / 2;
+                    if (nextDateIgnoringCompletion(date.plusDays(mid)).isBefore(expected)) low = mid;
+                    else high = mid;
+                }
+                completedThrough = nextDateIgnoringCompletion(date.plusDays(low));
+            }
+        }
+        return true;
     }
 
     /** 只按原始日期和重复规则计算发生日，供完成进度包装方法复用。 */
@@ -123,7 +169,8 @@ public final class Event {
      * 该方法被月历绘制逻辑调用，用来决定是否绘制蓝点或文字标签。
      */
     public boolean occursOn(LocalDate target) {
-        if (isTodo() && !NONE.equals(repeatRule) && completedThrough != null && !target.isAfter(completedThrough)) return false;
+        if (supportsCompletion()) return target.equals(nextDate(LocalDate.now()))
+                && !(completed && date.isBefore(LocalDate.now()));
         if (target.isBefore(date)) return false;
         if (NONE.equals(repeatRule)) return target.equals(date);
         if (lunarBased && YEARLY.equals(repeatRule)) return target.equals(nextLunarYearlyDate(target));
@@ -168,7 +215,7 @@ public final class Event {
      * 浏览月历中的其他日期不会改变这个结果；非待办始终不属于“过期待办”。
      */
     public boolean isOverdue() {
-        if (!isTodo()) return false;
+        if (!supportsCompletion() || isCompletedOn(LocalDate.now())) return false;
         LocalDate today = LocalDate.now(); LocalDate occurrence = nextDate(today);
         if (occurrence.isBefore(today)) return true;
         return occurrence.equals(today) && time != null && time.isBefore(LocalTime.now());
@@ -185,6 +232,9 @@ public final class Event {
 
     /** 判断当前事项是不是待办，集中维护类型字符串的比较逻辑。 */
     public boolean isTodo() { return "待办".equals(type); }
+
+    /** 普通日程与待办使用同一套完成状态和重复周期进度。 */
+    public boolean supportsCompletion() { return "普通日程".equals(type) || isTodo(); }
 
     /** 普通日程和待办允许设置分钟精度时间。 */
     public boolean supportsTime() { return "普通日程".equals(type) || isTodo(); }

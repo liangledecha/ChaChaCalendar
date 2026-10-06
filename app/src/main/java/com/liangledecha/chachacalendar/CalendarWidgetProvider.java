@@ -155,7 +155,7 @@ public final class CalendarWidgetProvider extends AppWidgetProvider {
         LocalDate next = event.nextDate(today);
         long days = event.daysUntil(today);
         String time = event.timeLabel().isEmpty() ? "" : " " + event.timeLabel();
-        String countdown = event.isOverdue() ? "已过期" : days == 0 ? "今天" : days > 0 ? days + "天后" : "已过" + (-days) + "天";
+        String countdown = event.isCompletedOn(today) ? "已完成" : event.isOverdue() ? "已过期" : days == 0 ? "今天" : days > 0 ? days + "天后" : "已过" + (-days) + "天";
         return event.type + "·" + event.displayDate(next) + time + "·" + countdown;
     }
 

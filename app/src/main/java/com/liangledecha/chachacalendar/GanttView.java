@@ -142,7 +142,7 @@ public final class GanttView extends View {
             Event event = items.get(row); float top = headerHeight + row * rowHeight - verticalOffset;
             paint.setColor(row % 2 == 0 ? Color.WHITE : Color.rgb(250,251,250)); canvas.drawRect(0, top, labelWidth - dp(1), top + rowHeight, paint);
             paint.setColor(Color.rgb(232,235,232)); canvas.drawLine(0, top + rowHeight, labelWidth, top + rowHeight, paint);
-            textPaint.setColor(event.completed ? Color.rgb(145,148,156) : event.isOverdue() ? Color.rgb(210,55,67) : Color.rgb(35,40,48));
+            textPaint.setColor(event.isCompletedOn(LocalDate.now()) ? Color.rgb(145,148,156) : event.isOverdue() ? Color.rgb(210,55,67) : Color.rgb(35,40,48));
             textPaint.setTextSize(sp(13)); textPaint.setFakeBoldText(false);
             CharSequence title = TextUtils.ellipsize(event.title, textPaint, labelWidth - dp(20), TextUtils.TruncateAt.END);
             canvas.drawText(title.toString(), dp(10), top + rowHeight / 2f + dp(5), textPaint);
@@ -160,7 +160,7 @@ public final class GanttView extends View {
             if (!event.occursOn(date)) continue;
             LocalDateTime start = event.ganttStart(date), end = event.ganttEnd(date);
             float x1 = dateX(start), x2 = dateX(end);
-            int color = event.completed ? Color.rgb(155,160,166) : event.isOverdue() ? Color.rgb(210,55,67) : accent;
+            int color = event.isCompletedOn(LocalDate.now()) ? Color.rgb(155,160,166) : event.isOverdue() ? Color.rgb(210,55,67) : accent;
             paint.setColor(color); paint.setStyle(Paint.Style.FILL);
             float center = rowTop + rowHeight / 2f;
             if (event.plannedStart == null || event.plannedEnd == null || !end.isAfter(start)) {

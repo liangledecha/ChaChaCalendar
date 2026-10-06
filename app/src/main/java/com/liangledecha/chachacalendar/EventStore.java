@@ -11,6 +11,7 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 日程数据库访问层。
@@ -21,12 +22,24 @@ import java.util.List;
 public final class EventStore extends SQLiteOpenHelper {
     /** 数据库文件名；数据库保存在应用自己的私有目录中。 */
     private static final String DB = "chacha_calendar.db";
+    private final String deviceId;
     /** 创建数据库帮助对象；第七版把旧“日程”类型统一更名为“普通日程”。 */
-    public EventStore(Context context) { super(context, DB, null, 7); }
+    public EventStore(Context context) { super(context, DB, null, 8); deviceId = localRecordDeviceId(context); }
+
+    /** 本地记录设备标识，仅用于保留已有数据库字段的兼容性，不发起网络请求。 */
+    private static String localRecordDeviceId(Context context) {
+        android.content.SharedPreferences prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE);
+        String id = prefs.getString("record_device_uuid", "");
+        if (id.isEmpty()) {
+            id = UUID.randomUUID().toString();
+            prefs.edit().putString("record_device_uuid", id).apply();
+        }
+        return id;
+    }
 
     /** 首次安装时建立日程表和全部字段。 */
     @Override public void onCreate(SQLiteDatabase db) {
-        db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,type TEXT NOT NULL,visibility_days INTEGER NOT NULL DEFAULT -1,yearly INTEGER NOT NULL DEFAULT 1,repeat_rule TEXT NOT NULL DEFAULT 'YEARLY',event_time TEXT,completed INTEGER NOT NULL DEFAULT 0,completed_through TEXT,system_event_id INTEGER NOT NULL DEFAULT -1,date_system TEXT NOT NULL DEFAULT 'SOLAR',lunar_month INTEGER NOT NULL DEFAULT 0,lunar_day INTEGER NOT NULL DEFAULT 0,lunar_leap INTEGER NOT NULL DEFAULT 0,planned_start TEXT,planned_end TEXT)");
+        db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,type TEXT NOT NULL,visibility_days INTEGER NOT NULL DEFAULT -1,yearly INTEGER NOT NULL DEFAULT 1,repeat_rule TEXT NOT NULL DEFAULT 'YEARLY',event_time TEXT,completed INTEGER NOT NULL DEFAULT 0,completed_through TEXT,system_event_id INTEGER NOT NULL DEFAULT -1,date_system TEXT NOT NULL DEFAULT 'SOLAR',lunar_month INTEGER NOT NULL DEFAULT 0,lunar_day INTEGER NOT NULL DEFAULT 0,lunar_leap INTEGER NOT NULL DEFAULT 0,planned_start TEXT,planned_end TEXT,sync_uuid TEXT UNIQUE,clock_counter INTEGER NOT NULL DEFAULT 1,clock_device TEXT NOT NULL DEFAULT '',dirty INTEGER NOT NULL DEFAULT 1,deleted INTEGER NOT NULL DEFAULT 0)");
     }
     /**
      * 升级旧数据库。
@@ -65,12 +78,45 @@ public final class EventStore extends SQLiteOpenHelper {
             // 只改类型展示名称，不触碰日期、重复、完成状态或甘特计划区间。
             db.execSQL("UPDATE events SET type='普通日程' WHERE type='日程'");
         }
+        if (oldVersion < 8) {
+            db.execSQL("ALTER TABLE events ADD COLUMN sync_uuid TEXT");
+            db.execSQL("ALTER TABLE events ADD COLUMN clock_counter INTEGER NOT NULL DEFAULT 1");
+            db.execSQL("ALTER TABLE events ADD COLUMN clock_device TEXT NOT NULL DEFAULT ''");
+            db.execSQL("ALTER TABLE events ADD COLUMN dirty INTEGER NOT NULL DEFAULT 1");
+            db.execSQL("ALTER TABLE events ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0");
+            ArrayList<Long> ids = new ArrayList<>();
+            try (Cursor cursor = db.query("events", new String[]{"id"}, null, null, null, null, null)) {
+                while (cursor.moveToNext()) ids.add(cursor.getLong(0));
+            }
+            for (long id : ids) {
+                ContentValues values = new ContentValues();
+                values.put("sync_uuid", UUID.randomUUID().toString());
+                values.put("clock_device", deviceId);
+                db.update("events", values, "id=?", new String[]{Long.toString(id)});
+            }
+            db.execSQL("CREATE UNIQUE INDEX events_sync_uuid ON events(sync_uuid)");
+        }
     }
     /**
      * 新增或更新一条事项。
      * 标识为零时执行新增，否则按主键更新原记录，并返回最终主键。
      */
     public long save(Event e) {
+        SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
+        try {
+            ContentValues v = values(e);
+            if (e.id == 0) {
+                v.put("sync_uuid", UUID.randomUUID().toString()); v.put("clock_device", deviceId);
+                e.id = db.insertOrThrow("events", null, v);
+            } else {
+                db.update("events", v, "id=? AND deleted=0", new String[]{Long.toString(e.id)});
+                bump(db, e.id);
+            }
+            db.setTransactionSuccessful(); return e.id;
+        } finally { db.endTransaction(); }
+    }
+
+    static ContentValues values(Event e) {
         ContentValues v = new ContentValues(); v.put("title", e.title); v.put("event_date", e.date.toString()); v.put("type", e.type);
         v.put("visibility_days", e.visibilityDays); v.put("yearly", Event.YEARLY.equals(e.repeatRule) ? 1 : 0); v.put("repeat_rule", e.repeatRule);
         if (e.time == null) v.putNull("event_time"); else v.put("event_time", e.time.toString());
@@ -81,19 +127,52 @@ public final class EventStore extends SQLiteOpenHelper {
         v.put("lunar_month", e.lunarMonth); v.put("lunar_day", e.lunarDay); v.put("lunar_leap", e.lunarLeapMonth ? 1 : 0);
         if (e.plannedStart == null) v.putNull("planned_start"); else v.put("planned_start", e.plannedStart.toString());
         if (e.plannedEnd == null) v.putNull("planned_end"); else v.put("planned_end", e.plannedEnd.toString());
-        if (e.id == 0) { e.id = getWritableDatabase().insertOrThrow("events", null, v); return e.id; }
-        getWritableDatabase().update("events", v, "id=?", new String[]{Long.toString(e.id)}); return e.id;
+        return v;
+    }
+
+    /** 接入日历期间用户可能仍在编辑；原子比较旧字段，禁止后台用过期副本覆盖新编辑。 */
+    boolean applyCalendarChange(Event event, ContentValues expected, boolean deleted) {
+        if (expected == null) { if (deleted) return false; save(event); return true; }
+        StringBuilder where = new StringBuilder("id=?");
+        ArrayList<String> args = new ArrayList<>(); args.add(Long.toString(event.id));
+        for (String key : expected.keySet()) {
+            where.append(" AND ").append(key).append(" IS ?"); args.add(expected.getAsString(key));
+        }
+        String[] arguments = args.toArray(new String[0]);
+        SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
+        try {
+            ContentValues update = deleted ? new ContentValues() : values(event);
+            if (deleted) update.put("deleted", 1);
+            boolean applied = db.update("events", update, where.toString() + " AND deleted=0", arguments) == 1;
+            if (applied) bump(db, event.id);
+            db.setTransactionSuccessful(); return applied;
+        } finally { db.endTransaction(); }
+    }
+
+    /** 原子替换可见事项，并保留旧记录标记以兼容已有数据库。 */
+    public void replaceAll(List<Event> events) {
+        SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
+        try {
+            db.execSQL("UPDATE events SET deleted=1,dirty=1,clock_counter=clock_counter+1,clock_device=? WHERE deleted=0",
+                    new Object[]{deviceId});
+            for (Event event : events) {
+                ContentValues values = values(event); values.put("system_event_id", -1);
+                values.put("sync_uuid", UUID.randomUUID().toString()); values.put("clock_device", deviceId);
+                db.insertOrThrow("events", null, values);
+            }
+            db.setTransactionSuccessful();
+        } finally { db.endTransaction(); }
     }
     /** 只更新待办的完成状态，避免勾选时覆盖其他字段。 */
     public void setCompleted(long id, boolean completed) {
         ContentValues values = new ContentValues(); values.put("completed", completed ? 1 : 0);
-        getWritableDatabase().update("events", values, "id=?", new String[]{Long.toString(id)});
+        updateAndBump(id, values);
     }
     /** 记录重复待办刚完成的周期；空值表示尚未完成过任何一次。 */
     public void setCompletedThrough(long id, LocalDate completedThrough) {
         ContentValues values = new ContentValues();
         if (completedThrough == null) values.putNull("completed_through"); else values.put("completed_through", completedThrough.toString());
-        getWritableDatabase().update("events", values, "id=?", new String[]{Long.toString(id)});
+        updateAndBump(id, values);
     }
     /** 保存系统日历返回的事件编号，供后续编辑和删除定位同一条系统事项。 */
     public void setSystemEventId(long id, long systemEventId) {
@@ -101,7 +180,23 @@ public final class EventStore extends SQLiteOpenHelper {
         getWritableDatabase().update("events", values, "id=?", new String[]{Long.toString(id)});
     }
     /** 按数据库主键永久删除一条事项。 */
-    public void delete(long id) { getWritableDatabase().delete("events", "id=?", new String[]{Long.toString(id)}); }
+    public void delete(long id) {
+        ContentValues values = new ContentValues(); values.put("deleted", 1);
+        updateAndBump(id, values);
+    }
+
+    private void updateAndBump(long id, ContentValues values) {
+        SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
+        try {
+            if (db.update("events", values, "id=? AND deleted=0", new String[]{Long.toString(id)}) == 1) bump(db, id);
+            db.setTransactionSuccessful();
+        } finally { db.endTransaction(); }
+    }
+
+    private void bump(SQLiteDatabase db, long id) {
+        db.execSQL("UPDATE events SET clock_counter=clock_counter+1,clock_device=?,dirty=1 WHERE id=?",
+                new Object[]{deviceId, id});
+    }
 
     /** 以今天为排序基准读取全部事项。 */
     public List<Event> all() { return all(LocalDate.now()); }
@@ -112,7 +207,7 @@ public final class EventStore extends SQLiteOpenHelper {
      */
     public List<Event> all(LocalDate anchor) {
         ArrayList<Event> out = new ArrayList<>();
-        try (Cursor c = getReadableDatabase().query("events", null, null, null, null, null, null)) {
+        try (Cursor c = getReadableDatabase().query("events", null, "deleted=0", null, null, null, null)) {
             while (c.moveToNext()) {
                 String storedTime = c.getString(c.getColumnIndexOrThrow("event_time"));
                 String plannedStart = c.getString(c.getColumnIndexOrThrow("planned_start"));
@@ -147,7 +242,7 @@ public final class EventStore extends SQLiteOpenHelper {
      */
     public List<Event> calendarItems(LocalDate anchor) {
         ArrayList<Event> result = new ArrayList<>();
-        for (Event event : all(anchor)) if (!event.isTodo() || !event.completed) result.add(event);
+        for (Event event : all(anchor)) if (!event.supportsCompletion() || !event.completed || !event.date.isBefore(LocalDate.now())) result.add(event);
         return result;
     }
     /** 以今天为基准读取符合提前显示规则的事项，供桌面小组件使用。 */
@@ -162,9 +257,9 @@ public final class EventStore extends SQLiteOpenHelper {
     public List<Event> visible(LocalDate anchor, boolean browsing) {
         ArrayList<Event> result = new ArrayList<>();
         for (Event e : all(anchor)) {
-            if (e.isTodo() && e.completed) continue;
+            if (e.supportsCompletion() && e.completed && e.date.isBefore(LocalDate.now())) continue;
             // 今天的主列表和小组件始终保留未办结过期待办；浏览其他日期时仍严格服从该日期的显示窗口。
-            boolean overdueToday = anchor.equals(LocalDate.now()) && e.isTodo() && e.isOverdue();
+            boolean overdueToday = anchor.equals(LocalDate.now()) && e.supportsCompletion() && e.isOverdue();
             if (overdueToday || (browsing ? e.daysUntil(anchor) >= 0 : e.shouldShow(anchor))) result.add(e);
         }
         return result;

@@ -19,8 +19,10 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.TextUtils;
+import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -58,6 +60,10 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 
 /**
  * 应用主页面和界面协调中心。
@@ -66,6 +72,23 @@ import java.util.Set;
  * 接收用户操作后调用数据库、刷新列表，并把变更同步到桌面小组件。</p>
  */
 public final class MainActivity extends Activity {
+    private final Runnable dayRollover = this::refreshAfterDayRollover;
+
+    private void refreshAfterDayRollover() {
+        if (list == null || isFinishing() || isDestroyed()) return;
+        refresh();
+        list.removeCallbacks(dayRollover);
+        long delay = Duration.between(java.time.ZonedDateTime.now(),
+                LocalDate.now().plusDays(1).atStartOfDay(java.time.ZoneId.systemDefault())).toMillis();
+        list.postDelayed(dayRollover, Math.max(1000, delay + 1000));
+    }
+
+    @Override protected void onPause() {
+        if (list != null) list.removeCallbacks(dayRollover);
+        super.onPause();
+    }
+    private boolean receivingSystemCalendar;
+    private static final int REQUEST_EXPORT_BACKUP = 301, REQUEST_IMPORT_BACKUP = 302;
     /** 小组件通过此参数要求主页面直接打开“日程”页。 */
     static final String EXTRA_OPEN_AGENDA = "打开日程页";
     /** 小组件事项行通过此参数告诉主页面需要定位和查看的数据库编号。 */
@@ -154,6 +177,7 @@ public final class MainActivity extends Activity {
             return insets;
         });
         setContentView(content);
+        LocalReminder.rebuildAsync(this);
         refresh();
         openRequestedSection(getIntent());
         requestCalendarPermissionIfNeeded();
@@ -200,7 +224,19 @@ public final class MainActivity extends Activity {
     /** 从其他页面返回应用时，如果正停留在待办页，再检查一次已办结事项是否刚刚过期。 */
     @Override protected void onResume() {
         super.onResume();
+        if (store != null && list != null) refreshAfterDayRollover();
         if (todosOnly && list != null) list.post(this::promptNextExpiredCompletedTodo);
+        if (store != null && SystemCalendarSync.hasPermission(this)
+                && CalendarSyncPolicy.receives(SystemCalendarSync.mode(this)) && !receivingSystemCalendar) {
+            receivingSystemCalendar = true;
+            new Thread(() -> {
+                try { SystemCalendarSync.receive(getApplicationContext(), store); }
+                finally { runOnUiThread(() -> {
+                    receivingSystemCalendar = false;
+                    if (!isFinishing() && !isDestroyed()) { LocalReminder.rebuildAsync(this); refresh(); updateWidgets(); }
+                }); }
+            }, "接入所选系统日历").start();
+        }
     }
 
     /**
@@ -209,6 +245,12 @@ public final class MainActivity extends Activity {
      */
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == LocalReminder.NOTIFICATION_PERMISSION_REQUEST) {
+            if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                Toast.makeText(this, "通知权限未开启，茶茶直接提醒暂时不会显示", Toast.LENGTH_LONG).show();
+            LocalReminder.rebuildAsync(this);
+            return;
+        }
         if (requestCode != SystemCalendarSync.PERMISSION_REQUEST) return;
         if (SystemCalendarSync.hasPermission(this)) {
             syncAllToSystem();
@@ -489,7 +531,7 @@ public final class MainActivity extends Activity {
 
     /** 从全部事项中筛出类型为“待办”的记录。 */
     private List<Event> todoEvents() {
-        ArrayList<Event> result = new ArrayList<>(); for (Event e : store.all()) if ("待办".equals(e.type)) result.add(e); return result;
+        ArrayList<Event> result = new ArrayList<>(); for (Event e : store.all()) if (e.supportsCompletion()) result.add(e); return result;
     }
 
     /** 打开待办专用列表并刷新底部选中状态。 */
@@ -501,27 +543,28 @@ public final class MainActivity extends Activity {
 
     /**
      * 响应待办左侧选择框的变化。
-     * 完成后保留在待办页并变灰，同时从月历、日程、小组件和系统日历中移除；取消勾选则恢复。
+     * 当天完成后保留本期并置灰；再次点击撤销，跨日后才允许下一期出现。
      */
-    private void toggleTodo(Event event, boolean completed) {
-        if (!event.isTodo() || event.completed == completed) return;
-        // 重复待办的勾选只完成当前周期，保留原始重复锚点并立即显示下一次。
-        if (completed && !Event.NONE.equals(event.repeatRule)) {
-            LocalDate completedOccurrence = event.nextDate(LocalDate.now());
-            event.completedThrough = completedOccurrence;
-            event.completed = false;
-            store.setCompletedThrough(event.id, completedOccurrence);
-            store.setCompleted(event.id, false);
+    private void toggleTodo(Event event, LocalDate expected, boolean completed) {
+        LocalDate today = LocalDate.now();
+        // 重读数据库并携带所见周期，过期窗口不能完成另一周期。
+        long eventId = event.id;
+        Event current = store.all().stream().filter(e -> e.id == eventId).findFirst().orElse(null);
+        if (current == null) return;
+        android.content.ContentValues before = EventStore.values(current);
+        boolean overdueBeforeCompletion = current.isOverdue();
+        if (!current.setOccurrenceCompleted(expected, completed, today)) { refresh(); return; }
+        event = current;
+        if (!store.applyCalendarChange(event, before, false)) { refresh(); return; }
+        LocalReminder.rebuildAsync(this);
+        if (!Event.NONE.equals(event.repeatRule)) {
             prefs.edit().remove(expiredPromptKey(event.id)).apply();
             syncOneToSystem(event, false);
             refresh();
-            Toast.makeText(this, "本次已完成，下一次：" + event.displayDate(event.nextDate(LocalDate.now())), Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, completed ? "本次已完成" : "已恢复未完成", Toast.LENGTH_SHORT).show();
             return;
         }
-        boolean overdueBeforeCompletion = event.isOverdue();
-        event.completed = completed;
-        store.setCompleted(event.id, completed);
-        if (completed) {
+        if (completed && CalendarSyncPolicy.sends(SystemCalendarSync.mode(this))) {
             long oldSystemId = event.systemEventId;
             event.systemEventId = -1;
             store.setSystemEventId(event.id, -1);
@@ -532,14 +575,15 @@ public final class MainActivity extends Activity {
             syncOneToSystem(event, false);
         }
         refresh();
-        if (completed && overdueBeforeCompletion) list.post(() -> promptDeleteExpiredCompleted(event));
+        Event savedEvent = event;
+        if (completed && overdueBeforeCompletion) list.post(() -> promptDeleteExpiredCompleted(savedEvent));
     }
 
     /** 在待办页寻找一条已完成且已经过期、尚未询问过的事项。 */
     private void promptNextExpiredCompletedTodo() {
         if (!todosOnly || section != Section.AGENDA) return;
         for (Event event : store.all()) {
-            if (event.isTodo() && event.completed && event.isOverdue()
+            if (event.supportsCompletion() && event.completed && event.nextDateTime(LocalDate.now()).isBefore(LocalDateTime.now())
                     && !prefs.getBoolean(expiredPromptKey(event.id), false)) {
                 promptDeleteExpiredCompleted(event); return;
             }
@@ -554,7 +598,7 @@ public final class MainActivity extends Activity {
                 .setMessage("“" + event.title + "”已办结且超过设定时间，是否从茶茶日历中删除？")
                 .setNegativeButton("保留", (dialog, which) -> promptNextExpiredCompletedTodo())
                 .setPositiveButton("删除", (dialog, which) -> {
-                    store.delete(event.id); prefs.edit().remove(expiredPromptKey(event.id)).apply(); refresh();
+                    store.delete(event.id); prefs.edit().remove(expiredPromptKey(event.id)).apply(); LocalReminder.rebuildAsync(this); refresh();
                     list.post(this::promptNextExpiredCompletedTodo);
                 }).show();
     }
@@ -678,7 +722,7 @@ public final class MainActivity extends Activity {
             int anniversaries = event.date.isAfter(today) ? 0 : Math.max(0, Period.between(event.date, today).getYears());
             details.append("\n周年提醒：已满").append(anniversaries).append("周年");
         }
-        if (event.isTodo()) details.append("\n状态：").append(event.completed ? "已办结" : event.isOverdue() ? "未办结 · 已过期" : "未办结");
+        if (event.supportsCompletion()) details.append("\n状态：").append(event.isCompletedOn(LocalDate.now()) ? "已办结" : event.isOverdue() ? "未办结 · 已过期" : "未办结");
         if (event.plannedStart != null && event.plannedEnd != null) {
             details.append("\n计划区间：").append(formatDateTime(event.plannedStart)).append(" 至 ").append(formatDateTime(event.plannedEnd));
         }
@@ -845,17 +889,18 @@ public final class MainActivity extends Activity {
             Event saved = new Event(id, name, chosen[0], selectedType,
                     visibilityValues[visibility.getSelectedItemPosition()], repeatValues[repeat.getSelectedItemPosition()],
                     planningType ? chosenTime[0] : null,
-                    original != null && original.completed && "待办".equals(selectedType),
+                    original != null && original.completed && planningType,
                     original == null ? -1 : original.systemEventId,
                     dateSystem.getSelectedItemPosition() == 1,
                     chosenLunar[0].month, chosenLunar[0].day, chosenLunar[0].leapMonth,
                     gantt ? plannedStart[0] : null, gantt ? plannedEnd[0] : null);
             // 只在重复锚点和规则未改变时保留已完成周期，修改计划本身则从新计划重新开始。
-            if (original != null && "待办".equals(selectedType) && !Event.NONE.equals(saved.repeatRule)
-                    && original.isTodo() && original.repeatRule.equals(saved.repeatRule) && original.date.equals(saved.date)) {
+            if (original != null && planningType && !Event.NONE.equals(saved.repeatRule)
+                    && original.supportsCompletion() && original.repeatRule.equals(saved.repeatRule) && original.date.equals(saved.date)) {
                 saved.completedThrough = original.completedThrough;
             }
             store.save(saved);
+            LocalReminder.rebuildAsync(this);
             prefs.edit().remove(expiredPromptKey(saved.id)).apply();
             syncOneToSystem(saved, true);
             dialog.dismiss(); refresh();
@@ -869,6 +914,7 @@ public final class MainActivity extends Activity {
                 .setNegativeButton("取消", null).setPositiveButton("删除", (d,w) -> {
                     long systemEventId = event.systemEventId;
                     store.delete(event.id);
+                    LocalReminder.rebuildAsync(this);
                     prefs.edit().remove(expiredPromptKey(event.id)).apply();
                     new Thread(() -> SystemCalendarSync.delete(getApplicationContext(), systemEventId), "删除系统日历事项").start();
                     refresh();
@@ -882,7 +928,7 @@ public final class MainActivity extends Activity {
             popup.getMenu().add(section == Section.YEAR ? "上一年" : "上一月");
             popup.getMenu().add(section == Section.YEAR ? "下一年" : "下一月");
         }
-        popup.getMenu().add("显示设置"); popup.getMenu().add("系统日历同步");
+        popup.getMenu().add("设置"); popup.getMenu().add("数据导出与导入"); popup.getMenu().add("系统日历同步"); popup.getMenu().add("提醒方式");
         popup.getMenu().add("关于天气来源"); popup.getMenu().add("关于");
         popup.setOnMenuItemClickListener(item -> {
             String s = item.getTitle().toString();
@@ -890,8 +936,10 @@ public final class MainActivity extends Activity {
             else if (s.equals("下一月")) calendar.nextMonth();
             else if (s.equals("上一年")) yearCalendar.setYear(yearCalendar.getYear()-1);
             else if (s.equals("下一年")) yearCalendar.setYear(yearCalendar.getYear()+1);
-            else if (s.equals("显示设置")) showSettings();
+            else if (s.equals("设置")) showSettings();
+            else if (s.equals("数据导出与导入")) showBackupSettings();
             else if (s.equals("系统日历同步")) showCalendarSyncInfo();
+            else if (s.equals("提醒方式")) showReminderSettings();
             else if (s.equals("关于天气来源")) showWeatherInfo();
             else if (s.equals("关于")) showAbout();
             updateTitle(); return true;
@@ -995,6 +1043,10 @@ public final class MainActivity extends Activity {
         Button updateHolidays = new Button(this); updateHolidays.setAllCaps(false); updateHolidays.setText("立即更新今年法定节假日");
         updateHolidays.setOnClickListener(v -> requestHolidayUpdate(LocalDate.now().getYear(), true, true));
         settings.addView(updateHolidays, new LinearLayout.LayoutParams(-1, dp(48)));
+        Button backup = backupButton("数据导出与导入", this::showBackupSettings);
+        settings.addView(backup, new LinearLayout.LayoutParams(-1, dp(48)));
+        settings.addView(backupButton("系统日历同步", this::showCalendarSyncInfo), new LinearLayout.LayoutParams(-1, dp(48)));
+        settings.addView(backupButton("提醒方式、声音与震动", this::showReminderSettings), new LinearLayout.LayoutParams(-1, dp(48)));
         TextView holidayNote = text("联网更新只发送年份，不上传日程、待办或纪念日；失败时继续使用缓存和内置安排。", 12, Color.rgb(105,112,128), false);
         settings.addView(holidayNote, new LinearLayout.LayoutParams(-1, dp(48)));
         String[] transparencyNames = {"不透明", "透明 15%", "透明 30%", "透明 45%", "透明 60%"};
@@ -1027,7 +1079,7 @@ public final class MainActivity extends Activity {
         settings.addView(powerNote, new LinearLayout.LayoutParams(-1, dp(42)));
         // 设置项较多时放进滚动容器，避免小屏手机底部选项和确认按钮被截断。
         ScrollView settingsScroll = new ScrollView(this); settingsScroll.addView(settings);
-        new AlertDialog.Builder(this).setTitle("显示设置").setView(settingsScroll).setNegativeButton("取消", null).setPositiveButton("完成", (d,w) -> {
+        new AlertDialog.Builder(this).setTitle("设置").setView(settingsScroll).setNegativeButton("取消", null).setPositiveButton("完成", (d,w) -> {
             prefs.edit().putBoolean("week_numbers", weeks.isChecked()).putBoolean("show_lunar_dates", lunar.isChecked())
                     .putBoolean("show_festivals", festivals.isChecked()).putBoolean("show_public_holidays", holidays.isChecked())
                     .putBoolean("show_solar_terms", terms.isChecked())
@@ -1039,6 +1091,117 @@ public final class MainActivity extends Activity {
             calendar.setShowWeekNumbers(weeks.isChecked()); calendar.setShowLunarDates(lunar.isChecked());
             refreshCalendarCulture(); if (holidays.isChecked()) requestHolidayUpdate(calendar.getMonth().getYear(), false, false); updateWidgets(); recreate();
         }).show();
+    }
+
+    /** 配置 WebDAV，并明确只提供用户触发的单次导出和导入。 */
+    private void showBackupSettings() {
+        WebDavCredentials saved = WebDavCredentials.load(this);
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(18), dp(6), dp(18), 0);
+        EditText address = new EditText(this); address.setHint("https://服务器/路径/ChaChaCalendar.chacha"); address.setText(saved.address); address.setSingleLine(true);
+        EditText username = new EditText(this); username.setHint("用户名"); username.setText(saved.username); username.setSingleLine(true);
+        EditText password = new EditText(this); password.setHint("密码"); password.setText(saved.password); password.setSingleLine(true);
+        password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        box.addView(labeled("WebDAV 地址", address)); box.addView(labeled("用户名", username)); box.addView(labeled("密码", password));
+        box.addView(backupButton("保存 WebDAV 配置", () -> {
+            if (saveWebDav(address, username, password)) Toast.makeText(this, "WebDAV 配置已保存", Toast.LENGTH_SHORT).show();
+        }));
+        TextView note = text("导入会在确认后替换本机全部事项。密码由 Android Keystore 加密保存。", 12, Color.rgb(105,112,128), false);
+        box.addView(note, new LinearLayout.LayoutParams(-1, dp(60)));
+        Button localExport = backupButton("导出到本地文件", () -> startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE).setType("application/octet-stream").putExtra(Intent.EXTRA_TITLE, "ChaChaCalendar.chacha"), REQUEST_EXPORT_BACKUP));
+        Button localImport = backupButton("从本地文件导入", () -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), REQUEST_IMPORT_BACKUP));
+        Button remoteExport = backupButton("导出到 WebDAV", () -> runWebDav(true, address, username, password));
+        Button remoteImport = backupButton("从 WebDAV 导入", () -> runWebDav(false, address, username, password));
+        box.addView(localExport); box.addView(localImport); box.addView(remoteExport); box.addView(remoteImport);
+        ScrollView scroll = new ScrollView(this); scroll.addView(box);
+        new AlertDialog.Builder(this).setTitle("数据导出与导入").setView(scroll).setPositiveButton("关闭", null).show();
+    }
+
+    private Button backupButton(String label, Runnable action) {
+        Button button = new Button(this); button.setAllCaps(false); button.setText(label); button.setOnClickListener(v -> action.run()); return button;
+    }
+
+    private boolean saveWebDav(EditText address, EditText username, EditText password) {
+        try { WebDavCredentials.save(this, address.getText().toString(), username.getText().toString(), password.getText().toString()); return true; }
+        catch (Exception error) { Toast.makeText(this, "WebDAV 密码保存失败", Toast.LENGTH_LONG).show(); return false; }
+    }
+
+    private void runWebDav(boolean export, EditText address, EditText username, EditText password) {
+        if (!saveWebDav(address, username, password)) return;
+        WebDavCredentials credentials = WebDavCredentials.load(this);
+        if (credentials.address.isEmpty()) { Toast.makeText(this, "请先填写 WebDAV 文件地址", Toast.LENGTH_LONG).show(); return; }
+        new Thread(() -> {
+            try {
+                if (export) WebDavClient.put(credentials.address, credentials.username, credentials.password, createBackup());
+                else handleDecodedBackup(BackupCodec.decode(new ByteArrayInputStream(WebDavClient.get(credentials.address, credentials.username, credentials.password))));
+                if (export) runOnUiThread(() -> Toast.makeText(this, "已手动导出到 WebDAV", Toast.LENGTH_LONG).show());
+            } catch (Exception error) { showBackupError(error); }
+        }, export ? "WebDAV手动导出" : "WebDAV手动导入").start();
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        Uri uri = data.getData();
+        new Thread(() -> {
+            try {
+                if (requestCode == REQUEST_EXPORT_BACKUP) {
+                    try (OutputStream out = getContentResolver().openOutputStream(uri, "w")) {
+                        if (out == null) throw new IOException("无法写入所选文件"); out.write(createBackup());
+                    }
+                    runOnUiThread(() -> Toast.makeText(this, "本地备份已导出", Toast.LENGTH_LONG).show());
+                } else if (requestCode == REQUEST_IMPORT_BACKUP) {
+                    try (InputStream in = getContentResolver().openInputStream(uri)) {
+                        if (in == null) throw new IOException("无法读取所选文件"); handleDecodedBackup(BackupCodec.decode(in));
+                    }
+                }
+            } catch (Exception error) { showBackupError(error); }
+        }, "本地备份文件").start();
+    }
+
+    private byte[] createBackup() throws IOException {
+        HashMap<String, String> settings = new HashMap<>();
+        String[] booleans = {"week_numbers", "show_lunar_dates", "show_festivals", "show_public_holidays", "show_solar_terms", "show_widget_refresh"};
+        for (String key : booleans) settings.put(key, Boolean.toString(prefs.getBoolean(key, !"show_widget_refresh".equals(key))));
+        String[] integers = {"widget_transparency", "widget_header_font_level", "widget_event_font_level", "theme_accent"};
+        int[] defaults = {15, 1, 1, DEFAULT_ACCENT};
+        for (int i = 0; i < integers.length; i++) settings.put(integers[i], Integer.toString(prefs.getInt(integers[i], defaults[i])));
+        return BackupCodec.encode(store.all(), settings);
+    }
+
+    private void handleDecodedBackup(BackupCodec.Data backup) {
+        runOnUiThread(() -> new AlertDialog.Builder(this).setTitle("确认导入备份")
+                .setMessage("已验证备份完整性，共 " + backup.events.size() + " 条事项。继续将替换本机全部事项，此操作不可撤销。")
+                .setNegativeButton("取消", null).setPositiveButton("替换并导入", (d, w) -> importBackup(backup)).show());
+    }
+
+    private void importBackup(BackupCodec.Data backup) {
+        new Thread(() -> {
+            try {
+                List<Event> previous = store.all();
+                store.replaceAll(backup.events); applyBackupSettings(backup.settings);
+                LocalReminder.rebuildAsync(this);
+                if (SystemCalendarSync.hasPermission(this)) {
+                    for (Event event : previous) SystemCalendarSync.delete(getApplicationContext(), event.systemEventId);
+                    for (Event event : backup.events) store.setSystemEventId(event.id, SystemCalendarSync.sync(getApplicationContext(), event));
+                }
+                runOnUiThread(() -> { updateWidgets(); Toast.makeText(this, "备份导入完成", Toast.LENGTH_LONG).show(); recreate(); });
+            } catch (Exception error) { showBackupError(error); }
+        }, "导入日历备份").start();
+    }
+
+    private void applyBackupSettings(Map<String, String> values) {
+        SharedPreferences.Editor editor = prefs.edit();
+        String[] booleans = {"week_numbers", "show_lunar_dates", "show_festivals", "show_public_holidays", "show_solar_terms", "show_widget_refresh"};
+        for (String key : booleans) if (values.containsKey(key)) editor.putBoolean(key, Boolean.parseBoolean(values.get(key)));
+        String[] integers = {"widget_transparency", "widget_header_font_level", "widget_event_font_level", "theme_accent"};
+        for (String key : integers) if (values.containsKey(key)) try { editor.putInt(key, Integer.parseInt(values.get(key))); } catch (NumberFormatException ignored) { }
+        editor.putBoolean("seeded", true).apply();
+    }
+
+    private void showBackupError(Exception error) {
+        runOnUiThread(() -> Toast.makeText(this, "操作失败：" + (error.getMessage() == null ? "未知错误" : error.getMessage()), Toast.LENGTH_LONG).show());
     }
 
     /**
@@ -1089,16 +1252,68 @@ public final class MainActivity extends Activity {
         }, "更新法定节假日").start();
     }
 
+    /** 两种提醒来源互斥，避免系统日历和本机通知对同一事项双响。 */
+    private void showReminderSettings() {
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(18), dp(8), dp(18), dp(8));
+        Spinner source = spinner(new String[]{"系统日历提醒", "茶茶直接提醒"});
+        source.setSelection(LocalReminder.source(this));
+        box.addView(labeled("提醒来源", source));
+        TextView note = text("系统日历提醒依赖手机已安装的日历应用及其通知设置。茶茶直接提醒使用系统定时功能，无需常驻后台；全天事项上午 9 点提醒。声音、震动和横幅由系统通知设置决定。切换后会移除茶茶写入系统日历的重复提醒；从系统日历导入的原有提醒仍由原日历管理。", 13, Color.rgb(96,103,120), false);
+        box.addView(note);
+        box.addView(backupButton("设置茶茶提醒的声音、震动与通知", () -> {
+            try { LocalReminder.openNotificationSettings(this); }
+            catch (android.content.ActivityNotFoundException error) {
+                Toast.makeText(this, "请到系统设置中打开茶茶日历的通知设置", Toast.LENGTH_LONG).show();
+            }
+        }));
+        new AlertDialog.Builder(this).setTitle("提醒方式").setView(box).setNegativeButton("取消", null)
+                .setPositiveButton("保存", (dialog, which) -> {
+                    prefs.edit().putInt("reminder_source", source.getSelectedItemPosition()).apply();
+                    LocalReminder.rebuildAsync(this);
+                    if (SystemCalendarSync.hasPermission(this) && CalendarSyncPolicy.sends(SystemCalendarSync.mode(this))) syncAllToSystem();
+                    if (source.getSelectedItemPosition() == LocalReminder.DIRECT && Build.VERSION.SDK_INT >= 33
+                            && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                        requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, LocalReminder.NOTIFICATION_PERMISSION_REQUEST);
+                }).show();
+    }
+
     /** 展示系统日历同步状态，并允许用户重新授权或立即补同步。 */
     private void showCalendarSyncInfo() {
         boolean granted = SystemCalendarSync.hasPermission(this);
-        String message = granted
-                ? "系统日历权限已开启。茶茶日历会把事项与提醒写入可写系统日历，通知样式由手机日历的通知渠道决定。"
-                : "尚未获得系统日历权限。授权后可借用系统日历提供声音、震动、横幅和状态栏提醒；拒绝不会影响本地功能。";
-        new AlertDialog.Builder(this).setTitle("系统日历同步").setMessage(message).setNegativeButton("取消", null)
-                .setPositiveButton(granted ? "立即同步" : "去授权", (dialog, which) -> {
-                    if (granted) syncAllToSystem(); else requestCalendarPermission();
-                }).show();
+        if (!granted) {
+            new AlertDialog.Builder(this).setTitle("系统日历同步").setMessage("授权后可选择同步方式。默认仅茶茶日历写入系统日历，不读取系统事项；拒绝不影响本地功能。")
+                    .setNegativeButton("取消", null).setPositiveButton("去授权", (dialog, which) -> requestCalendarPermission()).show();
+            return;
+        }
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(18), dp(8), dp(18), dp(8));
+        Spinner direction = spinner(CalendarSyncPolicy.LABELS); direction.setSelection(SystemCalendarSync.mode(this));
+        box.addView(labeled("同步方式", direction));
+        List<SystemCalendarSync.CalendarChoice> choices = SystemCalendarSync.calendars(this);
+        String[] labels = new String[choices.size() + 1]; labels[0] = "请选择（不自动接入）";
+        int selected = 0;
+        for (int i = 0; i < choices.size(); i++) {
+            labels[i + 1] = choices.get(i).label;
+            if (choices.get(i).id == SystemCalendarSync.selectedCalendar(this)) selected = i + 1;
+        }
+        Spinner source = spinner(labels); source.setSelection(selected); box.addView(labeled("接入系统日历", source));
+        TextView note = text("反向、双向仅接入所选日历。复杂重复规则及冲突保留原数据，不强行覆盖。提醒来源可在“设置 → 提醒方式”切换；系统日历提醒不等同于时钟闹钟。", 13, Color.rgb(96,103,120), false);
+        box.addView(note);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("系统日历同步").setView(box).setNegativeButton("取消", null)
+                .setPositiveButton("保存并同步", null).create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            int mode = direction.getSelectedItemPosition();
+            int index = source.getSelectedItemPosition();
+            if (CalendarSyncPolicy.receives(mode) && index == 0) {
+                Toast.makeText(this, "请选择要接入的系统日历", Toast.LENGTH_LONG).show(); return;
+            }
+            if (mode == CalendarSyncPolicy.BOTH && !choices.get(index - 1).writable) {
+                Toast.makeText(this, "双向同步需要选择可写的系统日历", Toast.LENGTH_LONG).show(); return;
+            }
+            prefs.edit().putInt("calendar_sync_mode", mode).putLong("calendar_sync_source", index == 0 ? -1 : choices.get(index - 1).id).apply();
+            dialog.dismiss(); syncAllToSystem();
+        }));
+        dialog.show();
     }
 
     /** 首次进入新版时先解释用途，再请求系统日历读写权限。 */
@@ -1106,7 +1321,8 @@ public final class MainActivity extends Activity {
         if (SystemCalendarSync.hasPermission(this) || prefs.getBoolean("calendar_permission_asked", false)) return;
         new AlertDialog.Builder(this).setTitle("启用系统日历提醒")
                 .setMessage("授权后，茶茶日历新增或修改的事项会同步写入手机系统日历，并由系统日历负责声音、震动、横幅和状态栏通知。拒绝后仍可正常使用本地日历。")
-                .setNegativeButton("暂不启用", null).setPositiveButton("继续", (dialog, which) -> requestCalendarPermission()).show();
+                .setNegativeButton("暂不启用", (dialog, which) -> prefs.edit().putBoolean("calendar_permission_asked", true).apply())
+                .setPositiveButton("继续", (dialog, which) -> requestCalendarPermission()).show();
     }
 
     /** 调用安卓运行时权限界面申请日历读取和写入权限。 */
@@ -1119,18 +1335,24 @@ public final class MainActivity extends Activity {
     /** 在后台把全部本地事项补同步到系统日历，避免数据库操作阻塞界面动画。 */
     private void syncAllToSystem() {
         if (!SystemCalendarSync.hasPermission(this)) { requestCalendarPermission(); return; }
-        Toast.makeText(this, "正在同步到系统日历…", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "正在按所选方式同步…", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
-            int synced = 0;
-            for (Event event : store.all()) {
+            String received = SystemCalendarSync.receive(getApplicationContext(), store);
+            int synced = 0, reminded = 0;
+            if (CalendarSyncPolicy.sends(SystemCalendarSync.mode(this))) for (Event event : store.all()) {
                 long systemId = SystemCalendarSync.sync(getApplicationContext(), event);
                 store.setSystemEventId(event.id, systemId);
-                if (systemId > 0) synced++;
+                if (systemId > 0) { synced++; if (SystemCalendarSync.hasReminder(this, systemId)) reminded++; }
             }
-            int finalSynced = synced;
-            runOnUiThread(() -> Toast.makeText(this,
-                    finalSynced > 0 ? "已同步 " + finalSynced + " 条事项到系统日历" : "没有找到可写的系统日历，请先在系统日历中启用一个账户",
-                    Toast.LENGTH_LONG).show());
+            int finalSynced = synced, finalReminded = reminded;
+            LocalReminder.rebuild(getApplicationContext());
+            runOnUiThread(() -> {
+                refresh(); updateWidgets();
+                String sent = CalendarSyncPolicy.sends(SystemCalendarSync.mode(this)) ? "关联系统日历 " + finalSynced + " 条" : "";
+                if (LocalReminder.source(this) == LocalReminder.SYSTEM_CALENDAR && finalSynced > finalReminded)
+                    sent += "；其中 " + (finalSynced - finalReminded) + " 条未确认写入提醒";
+                Toast.makeText(this, received + (received.isEmpty() || sent.isEmpty() ? "" : "\n") + sent, Toast.LENGTH_LONG).show();
+            });
         }, "补同步系统日历").start();
     }
 
@@ -1144,8 +1366,12 @@ public final class MainActivity extends Activity {
             long systemId = SystemCalendarSync.sync(getApplicationContext(), event);
             event.systemEventId = systemId;
             store.setSystemEventId(event.id, systemId);
-            if (showFailure && systemId < 0) runOnUiThread(() -> Toast.makeText(this,
-                    "事项已保存在本地，但没有找到可写的系统日历。", Toast.LENGTH_LONG).show());
+            boolean missingReminder = LocalReminder.source(this) == LocalReminder.SYSTEM_CALENDAR
+                    && systemId > 0 && SystemCalendarSync.mode(this) != CalendarSyncPolicy.INBOUND
+                    && !SystemCalendarSync.hasReminder(this, systemId);
+            if (showFailure && (systemId < 0 || missingReminder)) runOnUiThread(() -> Toast.makeText(this,
+                    systemId < 0 ? "事项已保存在本地，但没有找到可写的系统日历。" : "日程已写入系统日历，但未确认写入提醒；请检查该日历是否支持提醒。",
+                    Toast.LENGTH_LONG).show());
         }, "同步单条系统日历事项").start();
     }
 
@@ -1269,7 +1495,7 @@ public final class MainActivity extends Activity {
         /** 当前主题主色；换色保存后会重建页面和适配器。 */
         private final int accent;
         /** 待办勾选状态变化时通知主页面更新数据库和系统日历。 */
-        interface CompletionListener { void onChanged(Event event, boolean completed); }
+        interface CompletionListener { void onChanged(Event event, LocalDate occurrence, boolean completed); }
         /** 创建文字和尺寸时需要的页面对象。 */
         private final Activity activity;
         /** 把勾选事件传回主页面的回调。 */
@@ -1299,21 +1525,22 @@ public final class MainActivity extends Activity {
             TextView rules = (TextView) information.getChildAt(2);
             TextView countdown = (TextView) row.getChildAt(2);
             completed.setOnCheckedChangeListener(null);
-            completed.setVisibility(todoMode && e.isTodo() ? View.VISIBLE : View.GONE);
-            completed.setChecked(e.completed);
-            completed.setOnCheckedChangeListener((button, checked) -> completionListener.onChanged(e, checked));
+            completed.setVisibility(e.supportsCompletion() ? View.VISIBLE : View.GONE);
+            boolean done = e.isCompletedOn(LocalDate.now());
+            completed.setChecked(done);
+            completed.setOnCheckedChangeListener((button, checked) -> completionListener.onChanged(e, next, checked));
             String timePart = e.timeLabel().isEmpty() ? "" : "  " + e.timeLabel();
-            boolean overdue = e.isTodo() && !e.completed && e.isOverdue();
+            boolean overdue = e.supportsCompletion() && !e.completed && e.isOverdue();
             // 第一行只放名称，复用行时复位滚动，防止沿用上一条事项的滚动位置。
             title.setSelected(false); title.setText(e.title); title.setSelected(true);
             date.setText(e.displayDate(next) + timePart);
             rules.setText(e.repeatLabel() + "·" + e.type + "·" + e.visibilityLabel());
-            countdown.setText(overdue ? "已过期" : days == 0 ? (e.timeLabel().isEmpty() ? "今天" : e.timeLabel()) : days > 0 ? days + " 天后" : "已过 " + (-days) + " 天");
-            int mainColor = e.completed ? Color.rgb(145,148,156) : overdue ? Color.rgb(210,55,67) : Color.rgb(25,28,35);
+            countdown.setText(done ? "已完成" : overdue ? "已过期" : days == 0 ? (e.timeLabel().isEmpty() ? "今天" : e.timeLabel()) : days > 0 ? days + " 天后" : "已过 " + (-days) + " 天");
+            int mainColor = done ? Color.rgb(145,148,156) : overdue ? Color.rgb(210,55,67) : Color.rgb(25,28,35);
             title.setTextColor(mainColor); date.setTextColor(mainColor); rules.setTextColor(mainColor);
-            countdown.setTextColor(e.completed ? mainColor : overdue ? Color.rgb(210,55,67) : accent);
-            row.setAlpha(e.completed ? .68f : 1f);
-            GradientDrawable background = new GradientDrawable(); background.setColor(e.completed ? Color.rgb(237,238,241) : Color.WHITE);
+            countdown.setTextColor(done ? mainColor : overdue ? Color.rgb(210,55,67) : accent);
+            row.setAlpha(done ? .68f : 1f);
+            GradientDrawable background = new GradientDrawable(); background.setColor(done ? Color.rgb(237,238,241) : Color.WHITE);
             background.setCornerRadius(dp(16)); background.setStroke(dp(1), Color.rgb(225,227,234)); row.setBackground(background);
             return row;
         }

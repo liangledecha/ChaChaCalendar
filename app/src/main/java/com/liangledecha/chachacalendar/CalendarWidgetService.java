@@ -66,7 +66,7 @@ public final class CalendarWidgetService extends RemoteViewsService {
             // 使用独立的新布局编号，禁止桌面继续复用早期版本只有一个文字控件的行。
             RemoteViews row = new RemoteViews(context.getPackageName(), R.layout.widget_event_row_v2);
             String details = CalendarWidgetProvider.widgetDetails(event, today);
-            int textColor = event.isOverdue() ? Color.rgb(210, 55, 67) : Color.rgb(32, 39, 55);
+            int textColor = event.isCompletedOn(LocalDate.now()) ? Color.rgb(145, 148, 156) : event.isOverdue() ? Color.rgb(210, 55, 67) : Color.rgb(32, 39, 55);
             LocalDate next = event.nextDate(today);
             int anniversary = event.anniversaryAt(next);
             String anniversaryText = anniversary < 0 ? "" : "·" + anniversary + "周年";

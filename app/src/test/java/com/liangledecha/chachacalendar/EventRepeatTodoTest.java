@@ -5,9 +5,40 @@ import org.junit.Test;
 import java.time.LocalDate;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
 
 /** 验证重复待办完成一次后会进入下一周期，同时保留每月原始日号。 */
 public final class EventRepeatTodoTest {
+    @Test public void completedOccurrenceStaysUntilItsDayEndsAndSupportsUndo() {
+        LocalDate today = LocalDate.of(2026, 1, 31);
+        for (String type : new String[]{"待办", "普通日程"}) {
+            for (String rule : new String[]{Event.DAILY, Event.WEEKLY, Event.MONTHLY, Event.QUARTERLY, Event.HALF_YEARLY, Event.YEARLY}) {
+                Event event = todo(today, rule);
+                event.type = type;
+                for (int i = 0; i < 5; i++) {
+                    assertTrue(event.setOccurrenceCompleted(today, true, today));
+                    assertTrue(event.isCompletedOn(today));
+                    assertEquals(today, event.nextDateAt(today.plusYears(2), today));
+                    assertFalse(event.setOccurrenceCompleted(today, true, today));
+                    assertTrue(event.setOccurrenceCompleted(today, false, today));
+                    assertFalse(event.isCompletedOn(today));
+                    assertEquals(today, event.nextDateAt(today, today));
+                }
+                event.setOccurrenceCompleted(today, true, today);
+                LocalDate tomorrow = today.plusDays(1);
+                LocalDate next = event.nextDateAt(tomorrow, tomorrow);
+                assertTrue(next.isAfter(today));
+                assertFalse(event.isCompletedOn(tomorrow));
+                assertFalse(event.setOccurrenceCompleted(today, false, tomorrow));
+                assertTrue(event.setOccurrenceCompleted(next, true, tomorrow));
+                assertEquals(next, event.nextDateAt(tomorrow, tomorrow));
+                assertTrue(event.setOccurrenceCompleted(next, false, tomorrow));
+                assertEquals(today, event.completedThrough);
+                assertEquals(today, event.date);
+            }
+        }
+    }
     /** 未勾选的每周待办必须停在已过期周期，不能自动跳到未来。 */
     @Test public void uncheckedWeeklyTodoKeepsOverdueOccurrence() {
         Event event = todo(LocalDate.of(2026, 8, 24), Event.WEEKLY);
