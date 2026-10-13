@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 背景带透明度，文字保持不透明；日夜配色分别保证周末与当天的可读性。 -->
+    <color name="grid_widget_background">#D9F1F5F1</color>
+    <color name="grid_widget_panel">#EEF7F9F5</color>
+    <color name="grid_widget_text">#283B31</color>
+    <color name="grid_widget_secondary">#475A4D</color>
+    <color name="grid_widget_weekend">#874139</color>
+    <color name="grid_widget_weekend_background">#CCF4E3DC</color>
+    <color name="grid_widget_today">#476951</color>
+    <color name="grid_widget_today_weekend">#8A5348</color>
+    <color name="grid_widget_today_text">#FFFFFF</color>
+    <color name="grid_widget_outline">#ADCFD9CC</color>
+    <color name="grid_widget_divider">#BBC7B9</color>
+</resources>

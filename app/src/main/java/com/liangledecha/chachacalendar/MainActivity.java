@@ -95,6 +95,8 @@ public final class MainActivity extends Activity {
     static final String EXTRA_EVENT_ID = "事项编号";
     /** 小组件加号通过此参数直接复用应用内的新建日程表单。 */
     static final String EXTRA_OPEN_CREATE = "快捷新建日程";
+    /** 月历和周历的日期区域要求回到今天所在月份，即使页面之前停留在日程页。 */
+    static final String EXTRA_OPEN_MONTH = "打开今天月历";
     /** 主内容区当前页面类型。日程和待办共用事项列表，通过额外开关区分。 */
     private enum Section { YEAR, MONTH, AGENDA }
     /** 默认低饱和护眼绿；用户可在显示设置中改为任意颜色。 */
@@ -199,6 +201,13 @@ public final class MainActivity extends Activity {
     /** 识别小组件入口参数；普通桌面图标启动仍保持进入月历。 */
     private void openRequestedSection(Intent intent) {
         if (intent == null) return;
+        if (intent.getBooleanExtra(EXTRA_OPEN_MONTH, false)) {
+            intent.removeExtra(EXTRA_OPEN_MONTH);
+            calendar.today();
+            switchSection(Section.MONTH);
+            updateTabStyles();
+            return;
+        }
         if (intent.getBooleanExtra(EXTRA_OPEN_CREATE, false)) {
             // 消费入口参数，避免屏幕旋转或页面复用时重复弹出新建窗口。
             intent.removeExtra(EXTRA_OPEN_CREATE);

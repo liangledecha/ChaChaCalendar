@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 星期标题使用独立色彩，避免红色日期只有颜色而没有位置提示。 -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/grid_weekday"
+    android:layout_width="0dp"
+    android:layout_height="match_parent"
+    android:layout_weight="1"
+    android:gravity="center"
+    android:includeFontPadding="false"
+    android:maxLines="1"
+    android:textSize="11sp"
+    android:textStyle="bold"
+    android:textColor="@color/grid_widget_secondary" />

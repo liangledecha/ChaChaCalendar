@@ -148,6 +148,8 @@ public final class CalendarWidgetProvider extends AppWidgetProvider {
             manager.updateAppWidget(id, views);
             manager.notifyAppWidgetViewDataChanged(id, R.id.widget_event_list);
         }
+        // 应用的既有保存、导入和设置刷新入口同时覆盖月历与周历，旧入口没有实例时也执行。
+        CalendarGridWidgetProvider.updateInstalled(context);
     }
 
     /** 小组件第二行固定为类型、日期及待办时间、倒计时；名称单独放在第一行。 */
@@ -166,7 +168,7 @@ public final class CalendarWidgetProvider extends AppWidgetProvider {
     static float eventTextSize(int level) { return EVENT_SIZES[levelIndex(level)]; }
 
     /** 创建由小组件点击触发的页面入口，并兼容安卓十五的后台页面启动规则。 */
-    private static PendingIntent activityPendingIntent(Context context, int requestCode, Intent intent, int flags) {
+    static PendingIntent activityPendingIntent(Context context, int requestCode, Intent intent, int flags) {
         Bundle options = null;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
             ActivityOptions activityOptions = ActivityOptions.makeBasic();
