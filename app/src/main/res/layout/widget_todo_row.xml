@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 待办行共享现有服务的数据与点击协议，颜色由日夜资源决定。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_item_root" android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:minHeight="48dp" android:padding="6dp" android:orientation="vertical" android:gravity="center_vertical">
+    <TextView android:id="@+id/widget_item_text" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:singleLine="true" android:ellipsize="end" android:includeFontPadding="false"
+        android:textColor="@color/grid_widget_text" android:textSize="13sp" />
+    <TextView android:id="@+id/widget_item_details" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="3dp" android:singleLine="true" android:ellipsize="end" android:includeFontPadding="false"
+        android:textColor="@color/grid_widget_secondary" android:textSize="11sp" />
+</LinearLayout>

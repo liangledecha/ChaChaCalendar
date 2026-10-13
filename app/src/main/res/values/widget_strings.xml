@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 选择器提供两个独立入口，布局中的动作描述供读屏使用。 -->
+    <string name="widget_month_name">茶茶月历</string>
+    <string name="widget_week_name">茶茶周历</string>
+    <string name="widget_month_description">完整月历、周末配色、今日高亮与日期下方农历</string>
+    <string name="widget_week_description">本周七天与最近未完成待办，支持滚动查看</string>
+    <string name="widget_month_subtitle">月历 · 茶茶日历</string>
+    <string name="widget_week_subtitle">本周 · 茶茶日历</string>
+    <string name="widget_week_range">%1$s — %2$s</string>
+    <string name="widget_recent_todos">最近待办</string>
+    <string name="widget_no_todos">暂无需要显示的未完成待办</string>
+    <string name="widget_refresh_description">刷新日历与待办</string>
+    <string name="widget_add_description">创建日程或待办</string>
+    <string name="widget_today_label">，今天</string>
+    <string name="widget_day_description">%1$d年%2$d月%3$d日%4$s，%5$s</string>
+    <string-array name="widget_weekdays">
+        <item>一</item><item>二</item><item>三</item><item>四</item><item>五</item><item>六</item><item>日</item>
+    </string-array>
+</resources>

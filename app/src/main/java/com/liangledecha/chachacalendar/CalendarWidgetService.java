@@ -23,9 +23,12 @@ import java.util.List;
  * 用户可直接在组件事项区上下滑动，系统负责视图复用和触摸处理。</p>
  */
 public final class CalendarWidgetService extends RemoteViewsService {
+    /** 周历只投影未完成的待办；未携带参数的旧小组件继续显示原有事项集合。 */
+    static final String EXTRA_TODOS_ONLY = "widget_todos_only";
     /** 系统绑定服务时，为对应小组件实例创建一份轻量数据工厂。 */
     @Override public RemoteViewsFactory onGetViewFactory(Intent intent) {
-        return new EventFactory(getApplicationContext(), intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID));
+        return new EventFactory(getApplicationContext(), intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID,
+                AppWidgetManager.INVALID_APPWIDGET_ID), intent.getBooleanExtra(EXTRA_TODOS_ONLY, false));
     }
 
     /** 从本地数据库读取可见事项，并把每条事项转换成远程行布局。 */
@@ -40,12 +43,16 @@ public final class CalendarWidgetService extends RemoteViewsService {
         private float textSize;
         /** 本实例编号，用于读取桌面调整后的实际可用宽度。 */
         private final int widgetId;
+        /** 同一服务的展示模式，适配器地址同时区分模式，防止桌面跨类型复用工厂。 */
+        private final boolean todosOnly;
         /** 第二行文字的测量画笔，只在组件数据或尺寸刷新时使用。 */
         private final TextPaint measurePaint = new TextPaint();
         /** 已扣除组件和事项左右内边距的内容宽度，单位为像素。 */
         private float contentWidth;
 
-        EventFactory(Context context, int widgetId) { this.context = context; this.widgetId = widgetId; }
+        EventFactory(Context context, int widgetId, boolean todosOnly) {
+            this.context = context; this.widgetId = widgetId; this.todosOnly = todosOnly;
+        }
 
         /** 首次建立列表适配器时读取一次数据。 */
         @Override public void onCreate() { reload(); }
@@ -64,9 +71,12 @@ public final class CalendarWidgetService extends RemoteViewsService {
             if (position < 0 || position >= events.size()) return null;
             Event event = events.get(position);
             // 使用独立的新布局编号，禁止桌面继续复用早期版本只有一个文字控件的行。
-            RemoteViews row = new RemoteViews(context.getPackageName(), R.layout.widget_event_row_v2);
+            RemoteViews row = new RemoteViews(context.getPackageName(), todosOnly
+                    ? R.layout.widget_todo_row : R.layout.widget_event_row_v2);
             String details = CalendarWidgetProvider.widgetDetails(event, today);
             int textColor = event.isCompletedOn(LocalDate.now()) ? Color.rgb(145, 148, 156) : event.isOverdue() ? Color.rgb(210, 55, 67) : Color.rgb(32, 39, 55);
+            if (todosOnly) textColor = context.getColor(event.isOverdue()
+                    ? R.color.grid_widget_weekend : R.color.grid_widget_text);
             LocalDate next = event.nextDate(today);
             int anniversary = event.anniversaryAt(next);
             String anniversaryText = anniversary < 0 ? "" : "·" + anniversary + "周年";
@@ -101,11 +111,11 @@ public final class CalendarWidgetService extends RemoteViewsService {
         /** 严格复用主组件的提前显示规则和字号设置，不维护第二套筛选逻辑。 */
         private void reload() {
             today = LocalDate.now();
-            EventStore store = new EventStore(context);
-            List<Event> visible = store.visible();
-            store.close();
+            List<Event> visible;
+            // 读库失败时仍关闭连接，不把数据库生命周期交给桌面进程管理。
+            try (EventStore store = new EventStore(context)) { visible = store.visible(); }
             events.clear();
-            events.addAll(visible);
+            events.addAll(todosOnly ? CalendarWidgetDates.recentTodos(visible, today) : visible);
             SharedPreferences preferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE);
             textSize = CalendarWidgetProvider.eventTextSize(preferences.getInt("widget_event_font_level", 1));
             Bundle options = AppWidgetManager.getInstance(context).getAppWidgetOptions(widgetId);

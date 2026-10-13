@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 圆角形状可由桌面直接绘制，不传递位图。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/grid_widget_weekend_background" />
+    <corners android:radius="6dp" />
+</shape>

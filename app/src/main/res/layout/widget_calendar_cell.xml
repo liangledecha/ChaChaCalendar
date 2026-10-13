@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 日期与农历组成一个读屏节点；两行分别按实际高度缩放，字号下限允许系统大字体在六行月历中完整显示。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/grid_day_cell"
+    android:layout_width="0dp"
+    android:layout_height="match_parent"
+    android:layout_weight="1"
+    android:layout_marginStart="1dp"
+    android:layout_marginEnd="1dp"
+    android:layout_marginTop="1dp"
+    android:layout_marginBottom="1dp"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:importantForAccessibility="yes"
+    android:background="@drawable/grid_widget_day">
+    <TextView
+        android:id="@+id/grid_day_number"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1.2"
+        android:gravity="center_horizontal|bottom"
+        android:includeFontPadding="false"
+        android:importantForAccessibility="no"
+        android:maxLines="1"
+        android:textSize="14sp"
+        android:autoSizeTextType="uniform"
+        android:autoSizeMinTextSize="6sp"
+        android:autoSizeMaxTextSize="16sp"
+        android:autoSizeStepGranularity="1sp"
+        android:textStyle="bold"
+        android:textColor="@color/grid_widget_text" />
+    <TextView
+        android:id="@+id/grid_day_lunar"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center_horizontal|top"
+        android:includeFontPadding="false"
+        android:importantForAccessibility="no"
+        android:maxLines="1"
+        android:textSize="10sp"
+        android:autoSizeTextType="uniform"
+        android:autoSizeMinTextSize="6sp"
+        android:autoSizeMaxTextSize="10sp"
+        android:autoSizeStepGranularity="1sp"
+        android:textColor="@color/grid_widget_secondary" />
+</LinearLayout>
