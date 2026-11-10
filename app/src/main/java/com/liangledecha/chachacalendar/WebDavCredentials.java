@@ -29,7 +29,8 @@ final class WebDavCredentials {
     }
 
     static void save(Context context, String address, String username, String password) throws Exception {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("address", address.trim())
+        String root = WebDavClient.rootUrl(address).toString();
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("address", root)
                 .putString("username", username).putString("password", encrypt(password)).apply();
     }
 

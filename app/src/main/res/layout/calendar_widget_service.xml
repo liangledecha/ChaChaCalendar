@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 与直接列表保持相同外观但独立资源 ID，使适配器切换时系统重建 ListView。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:tag="agenda-service"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:orientation="vertical"
+    android:padding="14dp">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+        <TextClock
+            android:id="@+id/widget_time"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:format12Hour="HH:mm"
+            android:format24Hour="HH:mm"
+            android:textColor="@color/ink"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+        <TextView
+            android:id="@+id/widget_date"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
+            android:textColor="@color/accent"
+            android:textSize="13sp" />
+        <TextView
+            android:id="@+id/widget_refresh"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:gravity="center"
+            android:text="@string/widget_refresh"
+            android:textColor="@color/ink"
+            android:textSize="24sp" />
+        <TextView
+            android:id="@+id/widget_add"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:gravity="center"
+            android:text="@string/widget_add"
+            android:textColor="@color/ink"
+            android:textSize="26sp" />
+    </LinearLayout>
+    <TextView
+        android:id="@+id/widget_weather"
+        android:layout_width="match_parent"
+        android:layout_height="22dp"
+        android:gravity="center_vertical"
+        android:text="@string/widget_weather_default"
+        android:textColor="#687086"
+        android:textSize="11sp" />
+    <ListView
+        android:id="@+id/widget_event_list"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:divider="@android:color/transparent"
+        android:dividerHeight="0dp"
+        android:scrollbars="none" />
+    <TextView
+        android:id="@+id/widget_empty"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:text="@string/widget_empty"
+        android:textColor="#73798A"
+        android:textSize="14sp" />
+</LinearLayout>

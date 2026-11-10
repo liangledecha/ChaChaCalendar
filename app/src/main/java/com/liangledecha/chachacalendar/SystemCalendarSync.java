@@ -117,8 +117,16 @@ public final class SystemCalendarSync {
         }
     }
 
+    static synchronized long syncStored(Context context, EventStore store, long id) {
+        Event current = store.all().stream().filter(event -> event.id == id).findFirst().orElse(null);
+        if (current == null) return -1;
+        long systemId = sync(context, current);
+        store.setSystemEventId(id, systemId);
+        return systemId;
+    }
+
     /** 删除与本地事项对应的系统日历事件；没有编号时直接返回。 */
-    public static void delete(Context context, long systemEventId) {
+    public static synchronized void delete(Context context, long systemEventId) {
         if (!CalendarSyncPolicy.sends(mode(context)) || !hasPermission(context) || systemEventId <= 0) return;
         try {
             context.getContentResolver().delete(

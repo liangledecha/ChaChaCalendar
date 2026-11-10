@@ -59,7 +59,7 @@ public final class YearCalendarView extends View {
         float side = dp(7), usable = width - side * 2, cellW = usable / 7f;
         paint.setTextAlign(Paint.Align.LEFT); paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD); paint.setTextSize(sp(14)); paint.setColor(accent);
         canvas.drawText(ym.getMonthValue() + "月", left + side, top + dp(20), paint);
-        paint.setTypeface(android.graphics.Typeface.DEFAULT); paint.setTextAlign(Paint.Align.CENTER); paint.setTextSize(sp(7.5f)); paint.setColor(Color.rgb(145,150,164));
+        paint.setTypeface(android.graphics.Typeface.DEFAULT); paint.setTextAlign(Paint.Align.CENTER); paint.setTextSize(sp(7.5f)); paint.setColor(NightMode.foreground(getContext(), Color.rgb(145,150,164)));
         String[] week = {"一","二","三","四","五","六","日"};
         for (int i=0;i<7;i++) canvas.drawText(week[i], left + side + cellW*(i+.5f), top+dp(34), paint);
         int offset = ym.atDay(1).getDayOfWeek().getValue() - 1;
@@ -70,7 +70,7 @@ public final class YearCalendarView extends View {
             float cx = left + side + cellW*(c+.5f), cy = top + dp(45) + cellH*r;
             if (today.getYear()==year && today.getMonthValue()==ym.getMonthValue() && today.getDayOfMonth()==day) {
                 paint.setColor(accent); canvas.drawCircle(cx, cy-dp(2.5f), dp(7), paint); paint.setColor(Color.WHITE);
-            } else paint.setColor(c >= 5 ? Color.rgb(118,123,139) : Color.rgb(39,45,58));
+            } else paint.setColor(NightMode.foreground(getContext(), c >= 5 ? Color.rgb(118,123,139) : Color.rgb(39,45,58)));
             paint.setTextSize(sp(7.5f)); canvas.drawText(Integer.toString(day), cx, cy, paint);
         }
     }

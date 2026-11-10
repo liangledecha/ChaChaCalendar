@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_item_root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:minHeight="52dp"
+    android:orientation="horizontal">
+    <TextView
+        android:id="@+id/widget_item_check"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:contentDescription="@string/widget_mark_complete"
+        android:gravity="center"
+        android:text="@string/widget_check_unchecked"
+        android:textColor="@color/ink"
+        android:textSize="24sp" />
+    <LinearLayout
+        android:id="@+id/widget_item_body"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:gravity="center_vertical"
+        android:minHeight="48dp"
+        android:orientation="vertical"
+        android:paddingBottom="4dp"
+        android:paddingEnd="4dp"
+        android:paddingTop="4dp">
+        <TextView
+            android:id="@+id/widget_item_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:includeFontPadding="false"
+            android:singleLine="true"
+            android:textColor="@color/ink"
+            android:textSize="13sp" />
+        <TextView
+            android:id="@+id/widget_item_details"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:includeFontPadding="false"
+            android:singleLine="true"
+            android:textColor="#68736C"
+            android:textSize="11sp" />
+    </LinearLayout>
+</LinearLayout>

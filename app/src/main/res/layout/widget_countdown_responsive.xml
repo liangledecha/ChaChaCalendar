@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg_85">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center_vertical"
+        android:orientation="vertical"
+        android:padding="6dp">
+        <LinearLayout
+            android:id="@+id/widget_header"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+            <TextView
+                android:id="@+id/widget_countdown_title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="40dp"
+                android:ellipsize="end"
+                android:breakStrategy="simple"
+                android:hyphenationFrequency="none"
+                android:includeFontPadding="false"
+                android:maxLines="2"
+                android:text="@string/widget_countdown_choose"
+                android:textColor="@color/ink"
+                android:textSize="19sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+        <TextView
+            android:id="@+id/widget_countdown_value"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:breakStrategy="simple"
+            android:hyphenationFrequency="none"
+            android:gravity="center_vertical"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:text="@string/widget_countdown_placeholder"
+            android:textColor="@color/accent"
+            android:textSize="56sp"
+            android:textStyle="bold" />
+        <TextView
+            android:id="@+id/widget_countdown_type"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:breakStrategy="simple"
+            android:hyphenationFrequency="none"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:textColor="@color/ink"
+            android:textSize="13sp" />
+        <TextView
+            android:id="@+id/widget_countdown_date"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:breakStrategy="simple"
+            android:hyphenationFrequency="none"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:textColor="@color/ink"
+            android:textSize="16sp" />
+    </LinearLayout>
+    <ImageView
+        android:id="@+id/widget_pin"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="top|end"
+        android:contentDescription="@string/widget_countdown_choose"
+        android:padding="18dp"
+        android:src="@drawable/widget_menu" />
+</FrameLayout>

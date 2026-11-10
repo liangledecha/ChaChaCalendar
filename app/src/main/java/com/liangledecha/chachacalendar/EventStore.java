@@ -24,7 +24,7 @@ public final class EventStore extends SQLiteOpenHelper {
     private static final String DB = "chacha_calendar.db";
     private final String deviceId;
     /** 创建数据库帮助对象；第七版把旧“日程”类型统一更名为“普通日程”。 */
-    public EventStore(Context context) { super(context, DB, null, 8); deviceId = localRecordDeviceId(context); }
+    public EventStore(Context context) { super(context, DB, null, 9); deviceId = localRecordDeviceId(context); }
 
     /** 本地记录设备标识，仅用于保留已有数据库字段的兼容性，不发起网络请求。 */
     private static String localRecordDeviceId(Context context) {
@@ -40,6 +40,7 @@ public final class EventStore extends SQLiteOpenHelper {
     /** 首次安装时建立日程表和全部字段。 */
     @Override public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE events(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,event_date TEXT NOT NULL,type TEXT NOT NULL,visibility_days INTEGER NOT NULL DEFAULT -1,yearly INTEGER NOT NULL DEFAULT 1,repeat_rule TEXT NOT NULL DEFAULT 'YEARLY',event_time TEXT,completed INTEGER NOT NULL DEFAULT 0,completed_through TEXT,system_event_id INTEGER NOT NULL DEFAULT -1,date_system TEXT NOT NULL DEFAULT 'SOLAR',lunar_month INTEGER NOT NULL DEFAULT 0,lunar_day INTEGER NOT NULL DEFAULT 0,lunar_leap INTEGER NOT NULL DEFAULT 0,planned_start TEXT,planned_end TEXT,sync_uuid TEXT UNIQUE,clock_counter INTEGER NOT NULL DEFAULT 1,clock_device TEXT NOT NULL DEFAULT '',dirty INTEGER NOT NULL DEFAULT 1,deleted INTEGER NOT NULL DEFAULT 0)");
+        db.execSQL("CREATE TABLE local_trash(event_id INTEGER PRIMARY KEY,deleted_at INTEGER NOT NULL)");
     }
     /**
      * 升级旧数据库。
@@ -96,12 +97,14 @@ public final class EventStore extends SQLiteOpenHelper {
             }
             db.execSQL("CREATE UNIQUE INDEX events_sync_uuid ON events(sync_uuid)");
         }
+        if (oldVersion < 9) db.execSQL("CREATE TABLE local_trash(event_id INTEGER PRIMARY KEY,deleted_at INTEGER NOT NULL)");
     }
     /**
      * 新增或更新一条事项。
      * 标识为零时执行新增，否则按主键更新原记录，并返回最终主键。
      */
     public long save(Event e) {
+        synchronized (SystemCalendarSync.class) {
         SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
         try {
             ContentValues v = values(e);
@@ -114,6 +117,7 @@ public final class EventStore extends SQLiteOpenHelper {
             }
             db.setTransactionSuccessful(); return e.id;
         } finally { db.endTransaction(); }
+        }
     }
 
     static ContentValues values(Event e) {
@@ -132,6 +136,7 @@ public final class EventStore extends SQLiteOpenHelper {
 
     /** 接入日历期间用户可能仍在编辑；原子比较旧字段，禁止后台用过期副本覆盖新编辑。 */
     boolean applyCalendarChange(Event event, ContentValues expected, boolean deleted) {
+        synchronized (SystemCalendarSync.class) {
         if (expected == null) { if (deleted) return false; save(event); return true; }
         StringBuilder where = new StringBuilder("id=?");
         ArrayList<String> args = new ArrayList<>(); args.add(Long.toString(event.id));
@@ -147,21 +152,26 @@ public final class EventStore extends SQLiteOpenHelper {
             if (applied) bump(db, event.id);
             db.setTransactionSuccessful(); return applied;
         } finally { db.endTransaction(); }
+        }
     }
 
     /** 原子替换可见事项，并保留旧记录标记以兼容已有数据库。 */
     public void replaceAll(List<Event> events) {
+        synchronized (SystemCalendarSync.class) {
         SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
+        ArrayList<Long> insertedIds = new ArrayList<>();
         try {
             db.execSQL("UPDATE events SET deleted=1,dirty=1,clock_counter=clock_counter+1,clock_device=? WHERE deleted=0",
                     new Object[]{deviceId});
             for (Event event : events) {
                 ContentValues values = values(event); values.put("system_event_id", -1);
                 values.put("sync_uuid", UUID.randomUUID().toString()); values.put("clock_device", deviceId);
-                db.insertOrThrow("events", null, values);
+                insertedIds.add(db.insertOrThrow("events", null, values));
             }
             db.setTransactionSuccessful();
         } finally { db.endTransaction(); }
+        for (int i = 0; i < events.size(); i++) events.get(i).id = insertedIds.get(i);
+        }
     }
     /** 只更新待办的完成状态，避免勾选时覆盖其他字段。 */
     public void setCompleted(long id, boolean completed) {
@@ -176,26 +186,31 @@ public final class EventStore extends SQLiteOpenHelper {
     }
     /** 保存系统日历返回的事件编号，供后续编辑和删除定位同一条系统事项。 */
     public void setSystemEventId(long id, long systemEventId) {
+        synchronized (SystemCalendarSync.class) {
         ContentValues values = new ContentValues(); values.put("system_event_id", systemEventId);
-        getWritableDatabase().update("events", values, "id=?", new String[]{Long.toString(id)});
+        getWritableDatabase().update("events", values, "id=? AND deleted=0", new String[]{Long.toString(id)});
+        }
     }
-    /** 按数据库主键永久删除一条事项。 */
+    /** 按数据库主键移入本地回收站。 */
     public void delete(long id) {
         ContentValues values = new ContentValues(); values.put("deleted", 1);
         updateAndBump(id, values);
     }
 
     private void updateAndBump(long id, ContentValues values) {
+        synchronized (SystemCalendarSync.class) {
         SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
         try {
             if (db.update("events", values, "id=? AND deleted=0", new String[]{Long.toString(id)}) == 1) bump(db, id);
             db.setTransactionSuccessful();
         } finally { db.endTransaction(); }
+        }
     }
 
     private void bump(SQLiteDatabase db, long id) {
         db.execSQL("UPDATE events SET clock_counter=clock_counter+1,clock_device=?,dirty=1 WHERE id=?",
                 new Object[]{deviceId, id});
+        db.execSQL("INSERT OR IGNORE INTO local_trash SELECT id,? FROM events WHERE id=? AND deleted=1", new Object[]{System.currentTimeMillis(), id});
     }
 
     /** 以今天为排序基准读取全部事项。 */
@@ -205,9 +220,11 @@ public final class EventStore extends SQLiteOpenHelper {
      * 读取全部事项，并按相对于基准日期的下一次发生时间排序。
      * 游标放在自动关闭结构中，读取完成后会及时释放数据库资源。
      */
-    public List<Event> all(LocalDate anchor) {
+    public List<Event> all(LocalDate anchor) { return readEvents(anchor, "deleted=0", null); }
+
+    private List<Event> readEvents(LocalDate anchor, String selection, String[] args) {
         ArrayList<Event> out = new ArrayList<>();
-        try (Cursor c = getReadableDatabase().query("events", null, "deleted=0", null, null, null, null)) {
+        try (Cursor c = getReadableDatabase().query("events", null, selection, args, null, null, null)) {
             while (c.moveToNext()) {
                 String storedTime = c.getString(c.getColumnIndexOrThrow("event_time"));
                 String plannedStart = c.getString(c.getColumnIndexOrThrow("planned_start"));
@@ -234,6 +251,43 @@ public final class EventStore extends SQLiteOpenHelper {
             }
         }
         out.sort(Comparator.comparing(e -> e.nextDateTime(anchor))); return out;
+    }
+
+    List<Event> trash(int days) {
+        long cutoff = System.currentTimeMillis() - (days == 7 ? 7L : 30L) * 86400000L;
+        return readEvents(LocalDate.now(), "deleted=1 AND id IN (SELECT event_id FROM local_trash WHERE deleted_at>=?)", new String[]{Long.toString(cutoff)});
+    }
+
+    int trashCount() {
+        try (Cursor c = getReadableDatabase().rawQuery("SELECT COUNT(*) FROM events WHERE deleted=1", null)) {
+            c.moveToFirst(); return c.getInt(0);
+        }
+    }
+
+    boolean restore(long id, int days) {
+        synchronized (SystemCalendarSync.class) {
+        SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
+        try {
+            long cutoff = System.currentTimeMillis() - (days == 7 ? 7L : 30L) * 86400000L;
+            ContentValues values = new ContentValues(); values.put("deleted", 0); values.put("system_event_id", -1);
+            int updated = db.update("events", values, "id=? AND deleted=1 AND id IN (SELECT event_id FROM local_trash WHERE deleted_at>=?)", new String[]{Long.toString(id), Long.toString(cutoff)});
+            if (updated == 1) { db.delete("local_trash", "event_id=?", new String[]{Long.toString(id)}); bump(db, id); }
+            db.setTransactionSuccessful(); return updated == 1;
+        } finally { db.endTransaction(); }
+        }
+    }
+
+    int discardTrash(Long id) {
+        synchronized (SystemCalendarSync.class) {
+        SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
+        try {
+            String selection = id == null ? "deleted=1" : "deleted=1 AND id=?";
+            String[] args = id == null ? null : new String[]{Long.toString(id)};
+            int removed = db.delete("events", selection, args);
+            db.execSQL("DELETE FROM local_trash WHERE event_id NOT IN (SELECT id FROM events WHERE deleted=1)");
+            db.setTransactionSuccessful(); return removed;
+        } finally { db.endTransaction(); }
+        }
     }
 
     /**

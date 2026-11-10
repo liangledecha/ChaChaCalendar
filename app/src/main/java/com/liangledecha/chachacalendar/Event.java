@@ -145,7 +145,7 @@ public final class Event {
     }
 
     /** 只按原始日期和重复规则计算发生日，供完成进度包装方法复用。 */
-    private LocalDate nextDateIgnoringCompletion(LocalDate anchor) {
+    LocalDate nextDateIgnoringCompletion(LocalDate anchor) {
         // 农历每年重复不能套用固定公历月日，必须为每个农历年重新换算。
         if (lunarBased && YEARLY.equals(repeatRule)) return nextLunarYearlyDate(anchor);
         if (lunarBased && MONTHLY.equals(repeatRule)) return nextLunarMonthlyDate(anchor);

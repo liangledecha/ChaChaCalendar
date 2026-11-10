@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg_85"
+    android:orientation="vertical"
+    android:padding="12dp">
+    <LinearLayout
+        android:id="@+id/widget_header"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+        <TextView
+            android:id="@+id/widget_date"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:gravity="center_vertical"
+            android:singleLine="true"
+            android:text="@string/widget_todo_label"
+            android:textColor="@color/ink"
+            android:textSize="19sp"
+            android:textStyle="bold" />
+        <TextView
+            android:id="@+id/widget_add"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:contentDescription="@string/widget_add_description"
+            android:gravity="center"
+            android:text="@string/widget_add"
+            android:textColor="@color/accent"
+            android:textSize="26sp" />
+    </LinearLayout>
+    <ListView
+        android:id="@+id/widget_event_list"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:divider="@android:color/transparent"
+        android:dividerHeight="1dp"
+        android:scrollbars="none" />
+    <TextView
+        android:id="@+id/widget_empty"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:text="@string/widget_todo_empty"
+        android:textColor="#68736C"
+        android:textSize="14sp" />
+</LinearLayout>

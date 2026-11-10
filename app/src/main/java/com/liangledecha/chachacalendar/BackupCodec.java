@@ -20,6 +20,7 @@ import java.util.Map;
 
 /** 版本化的完整本地备份格式；只使用 Java 标准库，并在解析前校验 SHA-256。 */
 public final class BackupCodec {
+    public static final String FILE_NAME = "ChaChaCalendar.bin";
     private static final int MAGIC = 0x43484342, VERSION = 1, MAX_BYTES = 16 * 1024 * 1024, MAX_EVENTS = 100_000;
 
     public static final class Data {

@@ -36,6 +36,11 @@ public final class GitHubReleaseChecker {
             this.pageUrl = pageUrl;
             this.apkUrl = apkUrl;
         }
+
+        public String updateUrl() {
+            if (apkUrl != null && !apkUrl.isEmpty()) return apkUrl;
+            return pageUrl == null || pageUrl.isEmpty() ? PROJECT_URL + "/releases/latest" : pageUrl;
+        }
     }
 
     /** 把后台检查结果交回主界面；错误为空表示检查成功或成功读取缓存。 */

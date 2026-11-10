@@ -8,4 +8,19 @@
     <string name="widget_add">＋</string>
     <string name="widget_weather_default">天气 · 打开系统天气</string>
     <string name="widget_empty">今天暂无需要显示的事项</string>
+    <string name="widget_todo_label">待办清单</string>
+    <string name="widget_todo_description">今天的待办和普通日程，可直接完成或恢复</string>
+    <string name="widget_todo_empty">今天暂无需要显示的待办</string>
+    <string name="widget_countdown_label">倒数日</string>
+    <string name="widget_countdown_description">选定事项的天数、类型与日期</string>
+    <string name="widget_countdown_choose">选择事项</string>
+    <string name="widget_countdown_empty">请选择需要显示的事项</string>
+    <string name="widget_countdown_missing">所选事项已删除，请重新选择</string>
+    <string name="widget_countdown_no_candidates">暂无可选择的日程</string>
+    <string name="widget_countdown_placeholder">—</string>
+    <string name="widget_add_description">新增日程</string>
+    <string name="widget_mark_complete">标记完成</string>
+    <string name="widget_mark_incomplete">恢复未完成</string>
+    <string name="widget_check_unchecked">☐</string>
+    <string name="widget_check_checked">☑</string>
 </resources>

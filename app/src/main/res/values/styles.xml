@@ -8,4 +8,13 @@
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
+    <style name="AppTheme.Night" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#9DBCA3</item>
+        <item name="android:windowBackground">#141A18</item>
+        <item name="android:colorBackground">#222B27</item>
+        <item name="android:navigationBarColor">#141A18</item>
+        <item name="android:statusBarColor">#141A18</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
 </resources>

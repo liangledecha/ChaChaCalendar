@@ -44,7 +44,7 @@ public final class GanttView extends View {
 
     /** 初始化固定尺寸和手势；所有尺寸均按屏幕密度换算。 */
     public GanttView(Context context) {
-        super(context); setBackgroundColor(Color.WHITE); setFocusable(true);
+        super(context); setBackgroundColor(NightMode.surface(context)); setFocusable(true);
         labelWidth = dp(116); headerHeight = dp(48); rowHeight = dp(58); dayWidth = dp(44);
         gestures = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
             @Override public boolean onDown(MotionEvent event) { return true; }
@@ -104,15 +104,15 @@ public final class GanttView extends View {
         LocalDate visibleStart = baseDate.plusDays(firstDay), visibleEnd = baseDate.plusDays(lastDay);
 
         // 先绘制右侧日期背景、周末底色、网格和日期标题。
-        paint.setStyle(Paint.Style.FILL); paint.setColor(Color.WHITE); canvas.drawRect(labelWidth, 0, width, height, paint);
+        paint.setStyle(Paint.Style.FILL); paint.setColor(NightMode.surface(getContext())); canvas.drawRect(labelWidth, 0, width, height, paint);
         for (int day = firstDay; day <= lastDay; day++) {
             LocalDate date = baseDate.plusDays(day); float x = labelWidth + day * dayWidth - horizontalOffset;
             if (date.getDayOfWeek() == DayOfWeek.SATURDAY || date.getDayOfWeek() == DayOfWeek.SUNDAY) {
-                paint.setColor(Color.rgb(246,248,246)); canvas.drawRect(x, headerHeight, x + dayWidth, height, paint);
+                paint.setColor(NightMode.isNight(getContext()) ? NightMode.BACKGROUND : Color.rgb(246,248,246)); canvas.drawRect(x, headerHeight, x + dayWidth, height, paint);
             }
-            paint.setColor(Color.rgb(229,233,229)); paint.setStrokeWidth(dp(1)); canvas.drawLine(x, 0, x, height, paint);
+            paint.setColor(NightMode.border(getContext(), Color.rgb(229,233,229))); paint.setStrokeWidth(dp(1)); canvas.drawLine(x, 0, x, height, paint);
             if (shouldLabel(date)) {
-                textPaint.setColor(Color.rgb(82,89,100)); textPaint.setTextSize(sp(11)); textPaint.setFakeBoldText(false);
+                textPaint.setColor(NightMode.foreground(getContext(), Color.rgb(82,89,100))); textPaint.setTextSize(sp(11)); textPaint.setFakeBoldText(false);
                 String label = scale == SCALE_MONTH ? date.getMonthValue() + "月" :
                         date.getDayOfMonth() == 1 ? date.getMonthValue() + "/1" : Integer.toString(date.getDayOfMonth());
                 canvas.drawText(label, x + dp(3), dp(29), textPaint);
@@ -129,26 +129,26 @@ public final class GanttView extends View {
         int lastRow = Math.min(items.size() - 1, firstRow + (int) Math.ceil((height - headerHeight) / rowHeight) + 1);
         for (int row = firstRow; row <= lastRow; row++) {
             Event event = items.get(row); float top = headerHeight + row * rowHeight - verticalOffset;
-            paint.setColor(Color.rgb(232,235,232)); paint.setStrokeWidth(dp(1)); canvas.drawLine(0, top + rowHeight, width, top + rowHeight, paint);
+            paint.setColor(NightMode.border(getContext(), Color.rgb(232,235,232))); paint.setStrokeWidth(dp(1)); canvas.drawLine(0, top + rowHeight, width, top + rowHeight, paint);
             drawOccurrences(canvas, event, top, visibleStart, visibleEnd);
         }
 
         // 最后覆盖固定名称栏，保证横向滑动时任务条不会穿过文字。
-        paint.setColor(Color.WHITE); canvas.drawRect(0, 0, labelWidth, height, paint);
-        paint.setColor(Color.rgb(218,223,218)); canvas.drawRect(labelWidth - dp(1), 0, labelWidth, height, paint);
-        textPaint.setColor(Color.rgb(60,67,78)); textPaint.setTextSize(sp(12)); textPaint.setFakeBoldText(true);
+        paint.setColor(NightMode.surface(getContext())); canvas.drawRect(0, 0, labelWidth, height, paint);
+        paint.setColor(NightMode.border(getContext(), Color.rgb(218,223,218))); canvas.drawRect(labelWidth - dp(1), 0, labelWidth, height, paint);
+        textPaint.setColor(NightMode.foreground(getContext(), Color.rgb(60,67,78))); textPaint.setTextSize(sp(12)); textPaint.setFakeBoldText(true);
         canvas.drawText("事项", dp(12), dp(29), textPaint);
         for (int row = firstRow; row <= lastRow; row++) {
             Event event = items.get(row); float top = headerHeight + row * rowHeight - verticalOffset;
-            paint.setColor(row % 2 == 0 ? Color.WHITE : Color.rgb(250,251,250)); canvas.drawRect(0, top, labelWidth - dp(1), top + rowHeight, paint);
-            paint.setColor(Color.rgb(232,235,232)); canvas.drawLine(0, top + rowHeight, labelWidth, top + rowHeight, paint);
-            textPaint.setColor(event.isCompletedOn(LocalDate.now()) ? Color.rgb(145,148,156) : event.isOverdue() ? Color.rgb(210,55,67) : Color.rgb(35,40,48));
+            paint.setColor(NightMode.isNight(getContext()) ? NightMode.surface(getContext()) : row % 2 == 0 ? Color.WHITE : Color.rgb(250,251,250)); canvas.drawRect(0, top, labelWidth - dp(1), top + rowHeight, paint);
+            paint.setColor(NightMode.border(getContext(), Color.rgb(232,235,232))); canvas.drawLine(0, top + rowHeight, labelWidth, top + rowHeight, paint);
+            textPaint.setColor(NightMode.foreground(getContext(), event.isCompletedOn(LocalDate.now()) ? Color.rgb(145,148,156) : event.isOverdue() ? Color.rgb(210,55,67) : Color.rgb(35,40,48)));
             textPaint.setTextSize(sp(13)); textPaint.setFakeBoldText(false);
             CharSequence title = TextUtils.ellipsize(event.title, textPaint, labelWidth - dp(20), TextUtils.TruncateAt.END);
             canvas.drawText(title.toString(), dp(10), top + rowHeight / 2f + dp(5), textPaint);
         }
         if (items.isEmpty()) {
-            textPaint.setColor(Color.rgb(120,126,136)); textPaint.setTextSize(sp(14)); textPaint.setFakeBoldText(false);
+            textPaint.setColor(NightMode.foreground(getContext(), Color.rgb(120,126,136))); textPaint.setTextSize(sp(14)); textPaint.setFakeBoldText(false);
             canvas.drawText("暂无事项", dp(18), headerHeight + dp(36), textPaint);
         }
     }

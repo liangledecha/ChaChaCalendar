@@ -72,6 +72,27 @@ import java.io.OutputStream;
  * 接收用户操作后调用数据库、刷新列表，并把变更同步到桌面小组件。</p>
  */
 public final class MainActivity extends Activity {
+    private String searchName = "", searchFrom = "", searchUntil = "";
+    private int searchType, searchCompleted, searchLunar;
+    boolean nightApplied;
+    private boolean nightResumed;
+    private final Runnable nightBoundary = this::checkNightMode;
+    private final android.content.BroadcastReceiver nightClock = new android.content.BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) { checkNightMode(); }
+    };
+    private void checkNightMode() {
+        if (!nightResumed || list == null || isFinishing() || isDestroyed()) return;
+        list.removeCallbacks(nightBoundary);
+        java.time.ZonedDateTime now = java.time.ZonedDateTime.now();
+        int mode = prefs.getInt(NightMode.MODE, NightSchedule.OFF), start = NightMode.start(prefs), end = NightMode.end(prefs);
+        if (NightSchedule.active(mode, start, end, now.toLocalTime()) != nightApplied && hasWindowFocus()) { recreate(); return; }
+        if (mode == NightSchedule.TIMED && NightSchedule.valid(start, end))
+            list.postDelayed(nightBoundary, Duration.between(now, NightSchedule.nextChange(start, end, now)).toMillis() + 1);
+    }
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (focused) checkNightMode();
+    }
     private final Runnable dayRollover = this::refreshAfterDayRollover;
 
     private void refreshAfterDayRollover() {
@@ -84,6 +105,8 @@ public final class MainActivity extends Activity {
     }
 
     @Override protected void onPause() {
+        if (nightResumed) { nightResumed = false; unregisterReceiver(nightClock); }
+        if (list != null) list.removeCallbacks(nightBoundary);
         if (list != null) list.removeCallbacks(dayRollover);
         super.onPause();
     }
@@ -164,6 +187,9 @@ public final class MainActivity extends Activity {
      * 依次初始化数据库、设置、系统栏颜色、界面和初始数据，并应用系统安全区。
      */
     @Override protected void onCreate(Bundle state) {
+        prefs = getSharedPreferences("settings", MODE_PRIVATE);
+        nightApplied = NightMode.shouldBeNight(this);
+        setTheme(nightApplied ? R.style.AppTheme_Night : R.style.AppTheme);
         super.onCreate(state);
         store = new EventStore(this);
         prefs = getSharedPreferences("settings", MODE_PRIVATE);
@@ -171,6 +197,8 @@ public final class MainActivity extends Activity {
         seedSamplesIfEmpty();
         getWindow().setStatusBarColor(Color.TRANSPARENT);
         getWindow().setNavigationBarColor(tint(accent, .04f));
+        int bars = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        getWindow().getDecorView().setSystemUiVisibility(nightApplied ? 0 : bars);
         View content = buildUi();
         content.setOnApplyWindowInsetsListener((view, insets) -> {
             view.setPadding(0, insets.getSystemWindowInsetTop(), 0, insets.getSystemWindowInsetBottom());
@@ -178,9 +206,30 @@ public final class MainActivity extends Activity {
         });
         setContentView(content);
         LocalReminder.rebuildAsync(this);
+        if (state != null) restoreNightPage(state);
         refresh();
         openRequestedSection(getIntent());
         requestCalendarPermissionIfNeeded();
+        NightMode.schedule(this);
+    }
+
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putString("page_section", section.name()); state.putBoolean("page_todos", todosOnly);
+        state.putBoolean("page_gantt", ganttMode); state.putString("page_date", calendar.getSelectedDate().toString());
+        state.putString("page_month", calendar.getMonth().toString()); state.putString("page_mode", calendar.getMode().name());
+        state.putInt("page_year", yearCalendar.getYear()); state.putInt("page_row", list.getFirstVisiblePosition());
+        state.putInt("page_offset", list.getChildCount() == 0 ? 0 : list.getChildAt(0).getTop());
+    }
+
+    private void restoreNightPage(Bundle state) {
+        todosOnly = state.getBoolean("page_todos"); ganttMode = state.getBoolean("page_gantt");
+        calendar.setMonth(YearMonth.parse(state.getString("page_month", YearMonth.now().toString())));
+        calendar.setSelectedDate(LocalDate.parse(state.getString("page_date", LocalDate.now().toString())));
+        calendar.setMode(MonthCalendarView.Mode.valueOf(state.getString("page_mode", "MONTH")));
+        yearCalendar.setYear(state.getInt("page_year", LocalDate.now().getYear()));
+        switchSection(Section.valueOf(state.getString("page_section", "MONTH"))); updateTabStyles();
+        list.post(() -> list.setSelectionFromTop(state.getInt("page_row"), state.getInt("page_offset")));
     }
 
     /** 应用已经打开时接收小组件的新点击，并复用当前页面切换到日程页。 */
@@ -199,6 +248,22 @@ public final class MainActivity extends Activity {
     /** 识别小组件入口参数；普通桌面图标启动仍保持进入月历。 */
     private void openRequestedSection(Intent intent) {
         if (intent == null) return;
+        if (intent.hasExtra("widget_pin_id")) {
+            int widgetId = intent.getIntExtra("widget_pin_id", -1);
+            intent.removeExtra("widget_pin_id");
+            if (CalendarWidgetProvider.mode(this, AppWidgetManager.getInstance(this), widgetId) != WidgetData.COUNTDOWN
+                    || !WidgetActionToken.accepts(prefs.getString("widget_action_token", ""), intent.getStringExtra("widget_action_token"))) return;
+            List<Event> items = WidgetData.countdowns(store.all(), LocalDate.now());
+            if (items.isEmpty()) { Toast.makeText(this, R.string.widget_countdown_no_candidates, Toast.LENGTH_SHORT).show(); return; }
+            String[] names = new String[items.size()];
+            for (int i = 0; i < items.size(); i++) names[i] = items.get(i).title;
+            new AlertDialog.Builder(this).setTitle(R.string.widget_countdown_choose).setItems(names, (dialog, which) -> {
+                if (CalendarWidgetProvider.mode(this, AppWidgetManager.getInstance(this), widgetId) != WidgetData.COUNTDOWN) return;
+                prefs.edit().putLong("widget_pin_" + widgetId, items.get(which).id).apply();
+                CalendarWidgetProvider.updateAll(this, AppWidgetManager.getInstance(this), new int[]{widgetId});
+            }).setNegativeButton("取消", null).show();
+            return;
+        }
         if (intent.getBooleanExtra(EXTRA_OPEN_CREATE, false)) {
             // 消费入口参数，避免屏幕旋转或页面复用时重复弹出新建窗口。
             intent.removeExtra(EXTRA_OPEN_CREATE);
@@ -206,11 +271,13 @@ public final class MainActivity extends Activity {
             return;
         }
         if (!intent.getBooleanExtra(EXTRA_OPEN_AGENDA, false)) return;
+        intent.removeExtra(EXTRA_OPEN_AGENDA);
         todosOnly = false;
         ganttMode = false;
         switchSection(Section.AGENDA);
         updateTabStyles();
         long eventId = intent.getLongExtra(EXTRA_EVENT_ID, -1);
+        intent.removeExtra(EXTRA_EVENT_ID);
         if (eventId > 0) {
             // 同一详情仍开着时只把应用带回前台，不在其后面重复排队闪烁和弹窗。
             if (detailsDialog != null && detailsDialog.isShowing() && detailsEventId == eventId) return;
@@ -224,6 +291,10 @@ public final class MainActivity extends Activity {
     /** 从其他页面返回应用时，如果正停留在待办页，再检查一次已办结事项是否刚刚过期。 */
     @Override protected void onResume() {
         super.onResume();
+        android.content.IntentFilter clockFilter = new android.content.IntentFilter(Intent.ACTION_TIME_CHANGED);
+        clockFilter.addAction(Intent.ACTION_TIMEZONE_CHANGED); clockFilter.addAction(Intent.ACTION_DATE_CHANGED);
+        registerReceiver(nightClock, clockFilter, Build.VERSION.SDK_INT >= 33 ? Context.RECEIVER_NOT_EXPORTED : 0);
+        nightResumed = true; checkNightMode();
         if (store != null && list != null) refreshAfterDayRollover();
         if (todosOnly && list != null) list.post(this::promptNextExpiredCompletedTodo);
         if (store != null && SystemCalendarSync.hasPermission(this)
@@ -357,7 +428,7 @@ public final class MainActivity extends Activity {
 
         // 第七步：创建悬浮底栏，五个入口使用统一间距并避让系统导航区。
         LinearLayout bottom = new LinearLayout(this); bottom.setGravity(Gravity.CENTER); bottom.setPadding(dp(8), dp(7), dp(8), dp(7));
-        GradientDrawable bottomBg = new GradientDrawable(); bottomBg.setColor(Color.WHITE); bottomBg.setCornerRadius(dp(24)); bottom.setBackground(bottomBg); bottom.setElevation(dp(10));
+        GradientDrawable bottomBg = new GradientDrawable(); bottomBg.setColor(NightMode.surface(this)); bottomBg.setCornerRadius(dp(24)); bottom.setBackground(bottomBg); bottom.setElevation(dp(10));
         Button today = circleButton("今"); today.setOnClickListener(v -> goToday());
         bottomCalendar = bottomItem("日历", true); bottomCalendar.setOnClickListener(v -> { todosOnly = false; switchSection(Section.MONTH); updateTabStyles(); });
         bottomAgenda = bottomItem("日程", false); bottomAgenda.setOnClickListener(v -> { todosOnly=false; switchSection(Section.AGENDA); updateTabStyles(); });
@@ -436,12 +507,12 @@ public final class MainActivity extends Activity {
 
     /** 设置一个顶部按钮的颜色和字重。 */
     private void styleTab(TextView tab, boolean selected) {
-        tab.setTextColor(selected ? accent : Color.rgb(94,102,121)); tab.setTypeface(Typeface.DEFAULT, selected ? Typeface.BOLD : Typeface.NORMAL);
+        tab.setTextColor(ink(selected ? accent : Color.rgb(94,102,121))); tab.setTypeface(Typeface.DEFAULT, selected ? Typeface.BOLD : Typeface.NORMAL);
     }
 
     /** 设置一个底部文字按钮的颜色、字重和圆角选中背景。 */
     private void styleBottom(TextView item, boolean selected) {
-        item.setTextColor(selected ? accent : Color.rgb(82,89,106)); item.setTypeface(Typeface.DEFAULT, selected ? Typeface.BOLD : Typeface.NORMAL);
+        item.setTextColor(ink(selected ? accent : Color.rgb(82,89,106))); item.setTypeface(Typeface.DEFAULT, selected ? Typeface.BOLD : Typeface.NORMAL);
         GradientDrawable bg = new GradientDrawable(); bg.setColor(selected ? tint(accent, .12f) : Color.TRANSPARENT); bg.setCornerRadius(dp(18)); item.setBackground(bg);
     }
 
@@ -491,7 +562,10 @@ public final class MainActivity extends Activity {
 
     /** 为日程页或待办页装载相应数据，列表倒计时统一以今天计算。 */
     private void replaceForAgenda() {
-        List<Event> events = todosOnly ? todoEvents() : store.calendarItems(LocalDate.now());
+        boolean filtered = !searchName.isEmpty() || !searchFrom.isEmpty() || !searchUntil.isEmpty() || searchType != 0 || searchCompleted != 0 || searchLunar != 0;
+        List<Event> events = filtered ? new ArrayList<>() : todosOnly ? todoEvents() : store.calendarItems(LocalDate.now());
+        if (filtered) for (Event event : store.all()) if ((!todosOnly || event.supportsCompletion()) && EventSearch.matches(event, searchName, searchType, searchCompleted, searchLunar,
+                searchFrom.isEmpty() ? null : LocalDate.parse(searchFrom), searchUntil.isEmpty() ? null : LocalDate.parse(searchUntil), LocalDate.now())) events.add(event);
         adapter.setTodoMode(todosOnly);
         adapter.replace(events, LocalDate.now());
         if (ganttView != null) ganttView.setItems(events, LocalDate.now());
@@ -507,8 +581,8 @@ public final class MainActivity extends Activity {
         agendaModeBar.setVisibility(agenda ? View.VISIBLE : View.GONE);
         list.setVisibility(!agenda || !ganttMode ? View.VISIBLE : View.GONE);
         ganttView.setVisibility(agenda && ganttMode ? View.VISIBLE : View.GONE);
-        agendaListButton.setTextColor(!ganttMode ? accent : Color.rgb(82,89,106));
-        agendaGanttButton.setTextColor(ganttMode ? accent : Color.rgb(82,89,106));
+        agendaListButton.setTextColor(ink(!ganttMode ? accent : Color.rgb(82,89,106)));
+        agendaGanttButton.setTextColor(ink(ganttMode ? accent : Color.rgb(82,89,106)));
         ganttScaleButton.setVisibility(ganttMode ? View.VISIBLE : View.INVISIBLE);
     }
 
@@ -910,10 +984,14 @@ public final class MainActivity extends Activity {
 
     /** 长按事项后显示删除确认，避免误触造成数据丢失。 */
     private void confirmDelete(Event event) {
-        new AlertDialog.Builder(this).setTitle("删除“" + event.title + "”？").setMessage("删除后无法恢复。")
+        new AlertDialog.Builder(this).setTitle("删除“" + event.title + "”？").setMessage("删除后可在回收站内恢复。")
                 .setNegativeButton("取消", null).setPositiveButton("删除", (d,w) -> {
-                    long systemEventId = event.systemEventId;
-                    store.delete(event.id);
+                    long systemEventId;
+                    synchronized (SystemCalendarSync.class) {
+                        Event latest = store.all().stream().filter(item -> item.id == event.id).findFirst().orElse(null);
+                        systemEventId = latest == null ? -1 : latest.systemEventId;
+                        store.delete(event.id);
+                    }
                     LocalReminder.rebuildAsync(this);
                     prefs.edit().remove(expiredPromptKey(event.id)).apply();
                     new Thread(() -> SystemCalendarSync.delete(getApplicationContext(), systemEventId), "删除系统日历事项").start();
@@ -924,11 +1002,13 @@ public final class MainActivity extends Activity {
     /** 在三点按钮旁显示翻页、设置、同步、天气来源和关于菜单。 */
     private void showMenu(View anchor) {
         PopupMenu popup = new PopupMenu(this, anchor);
-        if (section != Section.AGENDA) {
-            popup.getMenu().add(section == Section.YEAR ? "上一年" : "上一月");
-            popup.getMenu().add(section == Section.YEAR ? "下一年" : "下一月");
+        if (section == Section.YEAR) {
+            popup.getMenu().add("上一年");
+            popup.getMenu().add("下一年");
         }
         popup.getMenu().add("设置"); popup.getMenu().add("数据导出与导入"); popup.getMenu().add("系统日历同步"); popup.getMenu().add("提醒方式");
+        popup.getMenu().add("搜索与筛选");
+        popup.getMenu().add("回收站");
         popup.getMenu().add("关于天气来源"); popup.getMenu().add("关于");
         popup.setOnMenuItemClickListener(item -> {
             String s = item.getTitle().toString();
@@ -940,10 +1020,92 @@ public final class MainActivity extends Activity {
             else if (s.equals("数据导出与导入")) showBackupSettings();
             else if (s.equals("系统日历同步")) showCalendarSyncInfo();
             else if (s.equals("提醒方式")) showReminderSettings();
+            else if (s.equals("搜索与筛选")) showSearch();
+            else if (s.equals("回收站")) showTrash();
             else if (s.equals("关于天气来源")) showWeatherInfo();
             else if (s.equals("关于")) showAbout();
             updateTitle(); return true;
         }); popup.show();
+    }
+
+    private void showSearch() {
+        LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(18), dp(8), dp(18), dp(8));
+        EditText name = new EditText(this); name.setHint("事项名称"); name.setText(searchName); form.addView(name);
+        Spinner type = spinner(EventSearch.TYPES), completed = spinner(new String[]{"全部完成状态", "未完成", "已完成"}), lunar = spinner(new String[]{"全部历法", "公历事项", "农历事项"});
+        type.setSelection(searchType); completed.setSelection(searchCompleted); lunar.setSelection(searchLunar);
+        form.addView(type); form.addView(completed); form.addView(lunar);
+        EditText from = searchDate("开始日期（可空，长按选择）", searchFrom), until = searchDate("结束日期（可空，长按选择）", searchUntil);
+        form.addView(from); form.addView(until);
+        form.addView(text("按已保存系列搜索，每项最多显示一次；日期区间检查该区间是否发生。", 13, Color.DKGRAY, false));
+        ScrollView scroll = new ScrollView(this); scroll.addView(form);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("搜索与筛选").setView(scroll).setNegativeButton("取消", null)
+                .setNeutralButton("清除筛选", (d,w) -> { searchName = searchFrom = searchUntil = ""; searchType = searchCompleted = searchLunar = 0; refresh(); })
+                .setPositiveButton("搜索", null).create();
+        dialog.setOnShowListener(d -> dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String a = from.getText().toString().trim(), b = until.getText().toString().trim();
+            try { LocalDate start = a.isEmpty() ? null : LocalDate.parse(a), end = b.isEmpty() ? null : LocalDate.parse(b);
+                if (start != null && end != null && end.isBefore(start)) throw new IllegalArgumentException();
+            } catch (Exception invalid) { new AlertDialog.Builder(this).setTitle("日期不正确").setMessage("请输入 YYYY-MM-DD，结束日期不能早于开始日期。").setPositiveButton("确定", null).show(); return; }
+            searchName = name.getText().toString().trim(); searchFrom = a; searchUntil = b; searchType = type.getSelectedItemPosition();
+            searchCompleted = completed.getSelectedItemPosition(); searchLunar = lunar.getSelectedItemPosition();
+            ganttMode = false; todosOnly = false; switchSection(Section.AGENDA); replaceForAgenda(); updateTabStyles(); dialog.dismiss();
+        })); dialog.show();
+    }
+
+    private EditText searchDate(String hint, String value) {
+        EditText date = new EditText(this); date.setSingleLine(true); date.setHint(hint); date.setText(value);
+        date.setOnLongClickListener(v -> {
+            LocalDate initial; try { initial = LocalDate.parse(date.getText().toString()); } catch (Exception ignored) { initial = LocalDate.now(); }
+            new DatePickerDialog(this, (d,y,m,day) -> date.setText(LocalDate.of(y,m+1,day).toString()), initial.getYear(), initial.getMonthValue()-1, initial.getDayOfMonth()).show(); return true;
+        }); return date;
+    }
+
+    private void showTrash() {
+        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(18), dp(8), dp(18), dp(8));
+        Spinner days = spinner(new String[]{"保留 7 天", "保留 30 天"}); days.setSelection(prefs.getInt("trash_days", 30) == 7 ? 0 : 1); box.addView(days);
+        box.addView(text("过期事项不再提供恢复。永久删除或清空将清除事项内容，无法恢复。", 13, Color.DKGRAY, false));
+        LinearLayout rows = new LinearLayout(this); rows.setOrientation(LinearLayout.VERTICAL); box.addView(rows);
+        ScrollView scroll = new ScrollView(this); scroll.addView(box);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("回收站").setView(scroll)
+                .setNeutralButton("清空回收站", null).setNegativeButton("关闭", null)
+                .setPositiveButton("保存保留期", (d,w) -> prefs.edit().putInt("trash_days", days.getSelectedItemPosition() == 0 ? 7 : 30).apply()).create();
+        dialog.setOnShowListener(d -> populateTrash(rows, dialog));
+        dialog.show();
+    }
+
+    private void populateTrash(LinearLayout rows, AlertDialog dialog) {
+        List<Event> events = store.trash(prefs.getInt("trash_days", 30));
+        int count = store.trashCount(); rows.removeAllViews();
+        rows.addView(text(events.isEmpty() ? "回收站暂无可恢复事项" : "共 " + events.size() + " 条可恢复事项", 14, Color.DKGRAY, false));
+        Button clear = dialog.getButton(DialogInterface.BUTTON_NEUTRAL); clear.setEnabled(count > 0);
+        clear.setOnClickListener(v -> confirmDiscardTrash(rows, dialog, null, "回收站中的全部 " + count + " 条事项"));
+        for (Event event : events) {
+            LinearLayout entry = new LinearLayout(this); entry.setOrientation(LinearLayout.VERTICAL); entry.setPadding(0, dp(12), 0, dp(8));
+            entry.addView(text(event.title, 16, Color.rgb(32,39,55), true));
+            entry.addView(text(event.type + " · " + event.date, 13, Color.DKGRAY, false));
+            LinearLayout actions = new LinearLayout(this); actions.setGravity(Gravity.END);
+            Button restore = backupButton("恢复", () -> new AlertDialog.Builder(this).setTitle("恢复此事项？")
+                    .setMessage("日期、重复及完成进度一并恢复。").setNegativeButton("取消", null).setPositiveButton("恢复", (d,w) -> {
+                        if (store.restore(event.id, prefs.getInt("trash_days", 30))) {
+                            for (Event restored : store.all()) if (restored.id == event.id) { syncOneToSystem(restored, false); break; }
+                            LocalReminder.rebuildAsync(this); refresh();
+                        }
+                        populateTrash(rows, dialog);
+                    }).show());
+            Button remove = backupButton("永久删除", () -> confirmDiscardTrash(rows, dialog, event.id, "“" + event.title + "”"));
+            restore.setContentDescription("恢复：" + event.title); remove.setContentDescription("永久删除：" + event.title);
+            actions.addView(restore, new LinearLayout.LayoutParams(-2, dp(48))); actions.addView(remove, new LinearLayout.LayoutParams(-2, dp(48)));
+            entry.addView(actions); rows.addView(entry);
+        }
+    }
+
+    private void confirmDiscardTrash(LinearLayout rows, AlertDialog dialog, Long id, String description) {
+        new AlertDialog.Builder(this).setTitle(id == null ? "清空回收站？" : "永久删除此事项？")
+                .setMessage("将永久删除" + description + "，无法恢复。")
+                .setNegativeButton("取消", null).setPositiveButton("永久删除", (d,w) -> {
+                    int removed = store.discardTrash(id); populateTrash(rows, dialog);
+                    Toast.makeText(this, "已永久删除 " + removed + " 条事项", Toast.LENGTH_SHORT).show();
+                }).show();
     }
 
     /** 显示已安装版本、GitHub 项目地址和联网取得的最新正式版本。 */
@@ -962,14 +1124,29 @@ public final class MainActivity extends Activity {
                 .setNegativeButton("关闭", null).setNeutralButton("检查更新", null)
                 .setPositiveButton("打开 GitHub", (ignored, which) -> openUrl(GitHubReleaseChecker.PROJECT_URL)).create();
         aboutDialog = dialog;
-        dialog.setOnShowListener(ignored -> dialog.getButton(DialogInterface.BUTTON_NEUTRAL)
-                .setOnClickListener(v -> checkForUpdates(true, latest)));
+        dialog.setOnShowListener(ignored -> {
+            updateAboutAction(cached);
+            dialog.getButton(DialogInterface.BUTTON_NEUTRAL).setOnClickListener(v -> checkForUpdates(true, latest));
+        });
         dialog.setOnDismissListener(ignored -> {
             if (aboutDialog == dialog) aboutDialog = null;
             showPendingUpdateIfPossible();
         });
         dialog.show();
         checkForUpdates(false, latest);
+    }
+
+    private void updateAboutAction(GitHubReleaseChecker.Release release) {
+        AlertDialog dialog = aboutDialog;
+        if (dialog == null || !dialog.isShowing()) return;
+        boolean newer = release != null && GitHubReleaseChecker.isNewer(release.version, installedVersion());
+        Button button = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
+        button.setText(newer ? "下载更新" : "打开 GitHub");
+        button.setOnClickListener(v -> {
+            if (newer) pendingRelease = null;
+            dialog.dismiss();
+            openUrl(newer ? release.updateUrl() : GitHubReleaseChecker.PROJECT_URL);
+        });
     }
 
     /** 请求最新版本；自动检查尊重“跳过此版本”，手动检查仍会报告该版本。 */
@@ -980,10 +1157,11 @@ public final class MainActivity extends Activity {
         if (latestLabel != null) latestLabel.setText("最新版本：正在检测…");
         GitHubReleaseChecker.check(this, (release, error) -> {
             checkingRelease = false;
-            TextView label = latestLabel != null ? latestLabel : waitingReleaseLabel;
+            TextView label = waitingReleaseLabel != null ? waitingReleaseLabel : latestLabel;
             waitingReleaseLabel = null;
             if (label != null) label.setText(release == null ? "最新版本：检测失败" :
                     "最新版本：" + release.version + (error == null ? "" : "（缓存）"));
+            updateAboutAction(release);
             if (release == null) {
                 if (manual) Toast.makeText(this, "暂时无法连接 GitHub，请稍后重试", Toast.LENGTH_LONG).show();
                 return;
@@ -1007,7 +1185,7 @@ public final class MainActivity extends Activity {
                 .setMessage("当前版本：" + installedVersion() + "\n最新版本：" + release.version)
                 .setNegativeButton("取消", null)
                 .setNeutralButton("跳过此版本", (ignored, which) -> prefs.edit().putString("skipped_release_tag", release.tag).apply())
-                .setPositiveButton("更新", (ignored, which) -> openUrl(release.apkUrl.isEmpty() ? release.pageUrl : release.apkUrl)).create();
+                .setPositiveButton("更新", (ignored, which) -> openUrl(release.updateUrl())).create();
         updateDialog = dialog;
         dialog.setOnDismissListener(ignored -> { if (updateDialog == dialog) updateDialog = null; });
         dialog.show();
@@ -1028,6 +1206,18 @@ public final class MainActivity extends Activity {
     /** 显示周数、农历、小组件背景和字号设置，并把结果持久化。 */
     private void showSettings() {
         LinearLayout settings = new LinearLayout(this); settings.setOrientation(LinearLayout.VERTICAL); settings.setPadding(dp(18), dp(8), dp(18), 0);
+        Spinner nightMode = spinner(new String[]{"关闭", "开启", "定时"});
+        nightMode.setSelection(Math.max(0, Math.min(2, prefs.getInt(NightMode.MODE, NightSchedule.OFF))));
+        int[] nightTimes = {NightMode.start(prefs), NightMode.end(prefs)};
+        Button nightStart = nightTimeButton(nightTimes, 0), nightEnd = nightTimeButton(nightTimes, 1);
+        settings.addView(labeled("夜间模式", nightMode));
+        settings.addView(labeled("开启时间", nightStart)); settings.addView(labeled("结束时间", nightEnd));
+        nightMode.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                nightStart.setEnabled(position == NightSchedule.TIMED); nightEnd.setEnabled(position == NightSchedule.TIMED);
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) { }
+        });
         Switch weeks = settingsSwitch("在最左侧显示这是今年第几周", prefs.getBoolean("week_numbers", true));
         settings.addView(weeks, new LinearLayout.LayoutParams(-1, dp(54)));
         Switch lunar = settingsSwitch("在月历日期格中显示农历", prefs.getBoolean("show_lunar_dates", true));
@@ -1079,7 +1269,12 @@ public final class MainActivity extends Activity {
         settings.addView(powerNote, new LinearLayout.LayoutParams(-1, dp(42)));
         // 设置项较多时放进滚动容器，避免小屏手机底部选项和确认按钮被截断。
         ScrollView settingsScroll = new ScrollView(this); settingsScroll.addView(settings);
-        new AlertDialog.Builder(this).setTitle("设置").setView(settingsScroll).setNegativeButton("取消", null).setPositiveButton("完成", (d,w) -> {
+        AlertDialog settingsDialog = new AlertDialog.Builder(this).setTitle("设置").setView(settingsScroll).setNegativeButton("取消", null).setPositiveButton("完成", null).create();
+        settingsDialog.show();
+        settingsDialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> {
+            if (nightMode.getSelectedItemPosition() == NightSchedule.TIMED && !NightSchedule.valid(nightTimes[0], nightTimes[1])) {
+                new AlertDialog.Builder(this).setTitle("时间设置无效").setMessage("开启和结束时间不能相同。").setPositiveButton("确定", null).show(); return;
+            }
             prefs.edit().putBoolean("week_numbers", weeks.isChecked()).putBoolean("show_lunar_dates", lunar.isChecked())
                     .putBoolean("show_festivals", festivals.isChecked()).putBoolean("show_public_holidays", holidays.isChecked())
                     .putBoolean("show_solar_terms", terms.isChecked())
@@ -1087,17 +1282,25 @@ public final class MainActivity extends Activity {
                     .putInt("widget_header_font_level", headerFont.getSelectedItemPosition() + 1)
                     .putInt("widget_event_font_level", eventFont.getSelectedItemPosition() + 1)
                     .putBoolean("show_widget_refresh", widgetRefresh.isChecked())
-                    .putInt("theme_accent", wheel.getColor()).apply();
+                    .putInt("theme_accent", wheel.getColor()).putInt(NightMode.MODE, nightMode.getSelectedItemPosition())
+                    .putInt(NightMode.START, nightTimes[0]).putInt(NightMode.END, nightTimes[1]).apply();
             calendar.setShowWeekNumbers(weeks.isChecked()); calendar.setShowLunarDates(lunar.isChecked());
-            refreshCalendarCulture(); if (holidays.isChecked()) requestHolidayUpdate(calendar.getMonth().getYear(), false, false); updateWidgets(); recreate();
-        }).show();
+            refreshCalendarCulture(); if (holidays.isChecked()) requestHolidayUpdate(calendar.getMonth().getYear(), false, false); updateWidgets(); NightMode.schedule(this); settingsDialog.dismiss(); recreate();
+        });
+    }
+    private Button nightTimeButton(int[] times, int index) {
+        Button button = new Button(this); button.setText(NightSchedule.format(times[index])); button.setAllCaps(false);
+        button.setOnClickListener(v -> new TimePickerDialog(this, (picker, hour, minute) -> {
+            times[index] = hour * 60 + minute; button.setText(NightSchedule.format(times[index]));
+        }, times[index] / 60, times[index] % 60, true).show());
+        return button;
     }
 
     /** 配置 WebDAV，并明确只提供用户触发的单次导出和导入。 */
     private void showBackupSettings() {
         WebDavCredentials saved = WebDavCredentials.load(this);
         LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(dp(18), dp(6), dp(18), 0);
-        EditText address = new EditText(this); address.setHint("https://服务器/路径/ChaChaCalendar.chacha"); address.setText(saved.address); address.setSingleLine(true);
+        EditText address = new EditText(this); address.setHint("http:// 或 https:// 地址（可带端口和文件夹路径）"); address.setText(saved.address); address.setSingleLine(true);
         EditText username = new EditText(this); username.setHint("用户名"); username.setText(saved.username); username.setSingleLine(true);
         EditText password = new EditText(this); password.setHint("密码"); password.setText(saved.password); password.setSingleLine(true);
         password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
@@ -1105,10 +1308,10 @@ public final class MainActivity extends Activity {
         box.addView(backupButton("保存 WebDAV 配置", () -> {
             if (saveWebDav(address, username, password)) Toast.makeText(this, "WebDAV 配置已保存", Toast.LENGTH_SHORT).show();
         }));
-        TextView note = text("导入会在确认后替换本机全部事项。密码由 Android Keystore 加密保存。", 12, Color.rgb(105,112,128), false);
-        box.addView(note, new LinearLayout.LayoutParams(-1, dp(60)));
+        TextView note = text("备份位置：/ChaChaCalendar/" + BackupCodec.FILE_NAME + "。\n导入会在确认后替换本机全部事项。密码由 Android Keystore 加密保存。", 12, Color.rgb(105,112,128), false);
+        box.addView(note, new LinearLayout.LayoutParams(-1, -2));
         Button localExport = backupButton("导出到本地文件", () -> startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT)
-                .addCategory(Intent.CATEGORY_OPENABLE).setType("application/octet-stream").putExtra(Intent.EXTRA_TITLE, "ChaChaCalendar.chacha"), REQUEST_EXPORT_BACKUP));
+                .addCategory(Intent.CATEGORY_OPENABLE).setType("application/octet-stream").putExtra(Intent.EXTRA_TITLE, BackupCodec.FILE_NAME), REQUEST_EXPORT_BACKUP));
         Button localImport = backupButton("从本地文件导入", () -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT)
                 .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), REQUEST_IMPORT_BACKUP));
         Button remoteExport = backupButton("导出到 WebDAV", () -> runWebDav(true, address, username, password));
@@ -1124,13 +1327,13 @@ public final class MainActivity extends Activity {
 
     private boolean saveWebDav(EditText address, EditText username, EditText password) {
         try { WebDavCredentials.save(this, address.getText().toString(), username.getText().toString(), password.getText().toString()); return true; }
-        catch (Exception error) { Toast.makeText(this, "WebDAV 密码保存失败", Toast.LENGTH_LONG).show(); return false; }
+        catch (Exception error) { Toast.makeText(this, "WebDAV 配置保存失败：" + error.getMessage(), Toast.LENGTH_LONG).show(); return false; }
     }
 
     private void runWebDav(boolean export, EditText address, EditText username, EditText password) {
         if (!saveWebDav(address, username, password)) return;
         WebDavCredentials credentials = WebDavCredentials.load(this);
-        if (credentials.address.isEmpty()) { Toast.makeText(this, "请先填写 WebDAV 文件地址", Toast.LENGTH_LONG).show(); return; }
+        if (credentials.address.isEmpty()) { Toast.makeText(this, "请先填写 http:// 或 https:// WebDAV 地址", Toast.LENGTH_LONG).show(); return; }
         new Thread(() -> {
             try {
                 if (export) WebDavClient.put(credentials.address, credentials.username, credentials.password, createBackup());
@@ -1184,7 +1387,7 @@ public final class MainActivity extends Activity {
                 LocalReminder.rebuildAsync(this);
                 if (SystemCalendarSync.hasPermission(this)) {
                     for (Event event : previous) SystemCalendarSync.delete(getApplicationContext(), event.systemEventId);
-                    for (Event event : backup.events) store.setSystemEventId(event.id, SystemCalendarSync.sync(getApplicationContext(), event));
+                    for (Event event : backup.events) SystemCalendarSync.syncStored(getApplicationContext(), store, event.id);
                 }
                 runOnUiThread(() -> { updateWidgets(); Toast.makeText(this, "备份导入完成", Toast.LENGTH_LONG).show(); recreate(); });
             } catch (Exception error) { showBackupError(error); }
@@ -1340,8 +1543,7 @@ public final class MainActivity extends Activity {
             String received = SystemCalendarSync.receive(getApplicationContext(), store);
             int synced = 0, reminded = 0;
             if (CalendarSyncPolicy.sends(SystemCalendarSync.mode(this))) for (Event event : store.all()) {
-                long systemId = SystemCalendarSync.sync(getApplicationContext(), event);
-                store.setSystemEventId(event.id, systemId);
+                long systemId = SystemCalendarSync.syncStored(getApplicationContext(), store, event.id);
                 if (systemId > 0) { synced++; if (SystemCalendarSync.hasReminder(this, systemId)) reminded++; }
             }
             int finalSynced = synced, finalReminded = reminded;
@@ -1363,9 +1565,8 @@ public final class MainActivity extends Activity {
             return;
         }
         new Thread(() -> {
-            long systemId = SystemCalendarSync.sync(getApplicationContext(), event);
+            long systemId = SystemCalendarSync.syncStored(getApplicationContext(), store, event.id);
             event.systemEventId = systemId;
-            store.setSystemEventId(event.id, systemId);
             boolean missingReminder = LocalReminder.source(this) == LocalReminder.SYSTEM_CALENDAR
                     && systemId > 0 && SystemCalendarSync.mode(this) != CalendarSyncPolicy.INBOUND
                     && !SystemCalendarSync.hasReminder(this, systemId);
@@ -1399,13 +1600,15 @@ public final class MainActivity extends Activity {
     /** 创建带下拉选项的选择控件。 */
     private Spinner spinner(String[] values) { Spinner s = new Spinner(this); s.setGravity(Gravity.CENTER_VERTICAL); s.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, values)); return s; }
     /** 创建工具栏使用的透明小按钮。 */
-    private Button smallButton(String label) { Button b = new Button(this); b.setText(label); b.setAllCaps(false); b.setTextColor(Color.rgb(60,68,86)); b.setBackgroundColor(Color.TRANSPARENT); b.setMinWidth(0); return b; }
+    private Button smallButton(String label) { Button b = new Button(this); b.setText(label); b.setAllCaps(false); b.setTextColor(ink(Color.rgb(60,68,86))); b.setBackgroundColor(Color.TRANSPARENT); b.setMinWidth(0); return b; }
     /** 创建文字控件，并一次性设置内容、字号、颜色和字重。 */
-    private TextView text(String value, float size, int color, boolean bold) { TextView t = new TextView(this); t.setText(value); t.setTextSize(size); t.setTextColor(color); if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD); return t; }
+    private TextView text(String value, float size, int color, boolean bold) { TextView t = new TextView(this); t.setText(value); t.setTextSize(size); t.setTextColor(ink(color)); if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD); return t; }
+    private int ink(int color) { return color == accent ? NightMode.accent(this, color) : NightMode.foreground(this, color); }
     /** 把与屏幕密度无关的尺寸转换为实际像素。 */
     private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
     /** 把主色与白色混合，生成护眼的浅背景和选中底色。 */
     private int tint(int color, float amount) {
+        if (nightApplied) return NightMode.blend(NightMode.BACKGROUND, color, amount);
         return Color.rgb(Math.round(255 - (255 - Color.red(color)) * amount), Math.round(255 - (255 - Color.green(color)) * amount), Math.round(255 - (255 - Color.blue(color)) * amount));
     }
     /** 把日期转换为完整中文年月日。 */
@@ -1485,7 +1688,7 @@ public final class MainActivity extends Activity {
                 current.getYear(), current.getMonthValue() - 1, current.getDayOfMonth()).show();
     }
     /** 用户修改数据后主动刷新全部桌面小组件。 */
-    private void updateWidgets() { AppWidgetManager m = AppWidgetManager.getInstance(this); int[] ids = m.getAppWidgetIds(new ComponentName(this, CalendarWidgetProvider.class)); CalendarWidgetProvider.updateAll(this, m, ids); }
+    private void updateWidgets() { CalendarWidgetProvider.invalidateLists(this); CalendarWidgetProvider.refreshAll(this); }
 
     /**
      * 下半区事项列表适配器。
@@ -1536,18 +1739,18 @@ public final class MainActivity extends Activity {
             date.setText(e.displayDate(next) + timePart);
             rules.setText(e.repeatLabel() + "·" + e.type + "·" + e.visibilityLabel());
             countdown.setText(done ? "已完成" : overdue ? "已过期" : days == 0 ? (e.timeLabel().isEmpty() ? "今天" : e.timeLabel()) : days > 0 ? days + " 天后" : "已过 " + (-days) + " 天");
-            int mainColor = done ? Color.rgb(145,148,156) : overdue ? Color.rgb(210,55,67) : Color.rgb(25,28,35);
+            int mainColor = NightMode.foreground(activity, done ? Color.rgb(145,148,156) : overdue ? Color.rgb(210,55,67) : Color.rgb(25,28,35));
             title.setTextColor(mainColor); date.setTextColor(mainColor); rules.setTextColor(mainColor);
-            countdown.setTextColor(done ? mainColor : overdue ? Color.rgb(210,55,67) : accent);
+            countdown.setTextColor(done || overdue ? mainColor : NightMode.accent(activity, accent));
             row.setAlpha(done ? .68f : 1f);
-            GradientDrawable background = new GradientDrawable(); background.setColor(done ? Color.rgb(237,238,241) : Color.WHITE);
-            background.setCornerRadius(dp(16)); background.setStroke(dp(1), Color.rgb(225,227,234)); row.setBackground(background);
+            GradientDrawable background = new GradientDrawable(); background.setColor(NightMode.isNight(activity) ? NightMode.SURFACE : done ? Color.rgb(237,238,241) : Color.WHITE);
+            background.setCornerRadius(dp(16)); background.setStroke(dp(1), NightMode.border(activity, Color.rgb(225,227,234))); row.setBackground(background);
             return row;
         }
         /** 创建一张新的白色圆角事项卡片。后续滚动时会复用它以降低内存开销。 */
         private LinearLayout createRow() {
             LinearLayout row = new LinearLayout(activity); row.setGravity(Gravity.CENTER_VERTICAL); row.setPadding(dp(16), dp(8), dp(16), dp(8));
-            GradientDrawable bg = new GradientDrawable(); bg.setColor(Color.WHITE); bg.setCornerRadius(dp(16)); bg.setStroke(dp(1), Color.rgb(233,235,242)); row.setBackground(bg);
+            GradientDrawable bg = new GradientDrawable(); bg.setColor(NightMode.surface(activity)); bg.setCornerRadius(dp(16)); bg.setStroke(dp(1), NightMode.border(activity, Color.rgb(233,235,242))); row.setBackground(bg);
             LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, dp(82)); rp.setMargins(0, dp(4), 0, dp(4)); row.setLayoutParams(rp);
             CheckBox box = new CheckBox(activity); box.setButtonTintList(android.content.res.ColorStateList.valueOf(accent));
             // 不抢占列表行焦点：点选择框正常勾选，点行内其他位置查看详情，长按仍触发删除。

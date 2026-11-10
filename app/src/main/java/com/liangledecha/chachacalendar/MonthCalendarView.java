@@ -96,6 +96,10 @@ public final class MonthCalendarView extends View {
     public YearMonth getMonth() { return month; }
     /** 返回当前选中日期，供下半区计算显示窗口。 */
     public LocalDate getSelectedDate() { return selected; }
+    public void setSelectedDate(LocalDate value) {
+        selected = value; month = YearMonth.from(value); invalidate();
+        if (listener != null) { listener.onDateSelected(selected); listener.onPeriodChanged(); }
+    }
     /** 跳转到指定年月，尽量保留原来的日号，并通知主页面刷新。 */
     public void setMonth(YearMonth value) {
         month = value; selected = safeDate(value.getYear(), value.getMonthValue(), selected.getDayOfMonth()); invalidate();
@@ -199,7 +203,7 @@ public final class MonthCalendarView extends View {
 
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setTextSize(sp(12));
-        paint.setColor(Color.rgb(105, 112, 130));
+        paint.setColor(NightMode.foreground(getContext(), Color.rgb(105, 112, 130)));
         for (int col = 0; col < 7; col++) c.drawText(weekdays[col], weekW + cellW * (col + .5f), dp(18), paint);
 
         LocalDate first = month.atDay(1);
@@ -215,7 +219,7 @@ public final class MonthCalendarView extends View {
                 drawDay(c, date, left, headerH + row * rowH, cellW, rowH);
             }
         }
-        paint.setColor(Color.rgb(151, 157, 172));
+        paint.setColor(NightMode.foreground(getContext(), Color.rgb(151, 157, 172)));
         handleRect.set(getWidth()/2f-dp(24), getHeight()-dp(9), getWidth()/2f+dp(24), getHeight()-dp(5));
         c.drawRoundRect(handleRect, dp(3), dp(3), paint);
         // 只有确实存在溢出文字且处于展开状态时才约每四十毫秒重绘，不启动后台常驻任务。
@@ -225,7 +229,7 @@ public final class MonthCalendarView extends View {
     /** 在指定行最左侧绘制年周数。 */
     private void drawWeek(Canvas c, LocalDate date, int row, float headerH, float rowH) {
         int week = date.get(WeekFields.ISO.weekOfWeekBasedYear());
-        paint.setTextAlign(Paint.Align.CENTER); paint.setTextSize(sp(10)); paint.setColor(Color.rgb(140,146,161));
+        paint.setTextAlign(Paint.Align.CENTER); paint.setTextSize(sp(10)); paint.setColor(NightMode.foreground(getContext(), Color.rgb(140,146,161)));
         c.drawText(Integer.toString(week), dp(15), headerH + row * rowH + dp(17), paint);
         paint.setTextSize(sp(8)); c.drawText("周", dp(15), headerH + row * rowH + dp(29), paint);
     }
@@ -244,7 +248,7 @@ public final class MonthCalendarView extends View {
             c.drawCircle(cx, top + dp(25), dp(21), paint); paint.setStyle(Paint.Style.FILL);
         }
         paint.setTextAlign(Paint.Align.CENTER); paint.setTextSize(sp(renderedMode == Mode.EXPANDED ? 17 : 18));
-        paint.setColor(isSelected ? Color.WHITE : inMonth ? Color.rgb(30,36,51) : Color.rgb(175,180,191));
+        paint.setColor(isSelected ? Color.WHITE : NightMode.foreground(getContext(), inMonth ? Color.rgb(30,36,51) : Color.rgb(175,180,191)));
         c.drawText(Integer.toString(date.getDayOfMonth()), cx, top + dp(showLunarDates ? 23 : 29), paint);
         String culturalLabel = culturalLabelMap.get(date);
         boolean hasSubLine = showLunarDates || culturalLabel != null;
@@ -255,7 +259,7 @@ public final class MonthCalendarView extends View {
             else if (culturalLabel != null && culturalLabel.startsWith("休·")) paint.setColor(Color.rgb(224,73,86));
             else if (culturalLabel != null && culturalLabel.startsWith("班·")) paint.setColor(Color.rgb(224,139,52));
             else if (culturalLabel != null) paint.setColor(Color.rgb(73,101,210));
-            else paint.setColor(inMonth ? Color.rgb(118,125,143) : Color.rgb(190,194,203));
+            else paint.setColor(NightMode.foreground(getContext(), inMonth ? Color.rgb(118,125,143) : Color.rgb(190,194,203)));
             c.drawText(culturalLabel == null ? LunarDateUtils.compact(date) : culturalLabel, cx, top + dp(37), paint);
         }
 
@@ -264,7 +268,7 @@ public final class MonthCalendarView extends View {
             int max = Math.min(2, events.size());
             for (int i = 0; i < max; i++) {
                 float y = top + dp((hasSubLine ? 43 : 39) + i * 18);
-                paint.setColor(events.get(i).type.equals("待办") ? Color.rgb(235,159,68) : accent);
+                paint.setColor(accent);
                 c.drawRoundRect(new RectF(left + dp(3), y, left + width - dp(3), y + dp(15)), dp(4), dp(4), paint);
                 paint.setColor(Color.WHITE); paint.setTextSize(sp(8)); paint.setTextAlign(Paint.Align.LEFT);
                 drawMarqueeLabel(c, events.get(i).title, left + dp(6), y, width - dp(12));
