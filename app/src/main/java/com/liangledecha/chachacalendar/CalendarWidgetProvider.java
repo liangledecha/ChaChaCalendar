@@ -158,7 +158,7 @@ public class CalendarWidgetProvider extends AppWidgetProvider {
             if (mode == WidgetData.COUNTDOWN) { renderCountdown(context, manager, id, today, preferences, background, accent); continue; }
             if (mode != WidgetData.AGENDA) continue;
             // 新布局编号使桌面丢弃旧控件树，避免同版本覆盖安装后把内容和点击写到错误控件。
-            RemoteViews views = CalendarWidgetService.agendaViews(context, id);
+            RemoteViews views = CalendarWidgetService.listViews(context, id, mode);
             views.setInt(R.id.widget_root, "setBackgroundResource", background);
             String specialDate = specialDateLabel(context, preferences, today);
             String todayText = today.format(dateFormat) + (!specialDate.isEmpty() ? " · " + specialDate
@@ -206,9 +206,7 @@ public class CalendarWidgetProvider extends AppWidgetProvider {
             } else {
                 views.setTextViewText(R.id.widget_weather, "天气 · 系统未开放");
             }
-            manager.updateAppWidget(id, views);
-            if (views.getLayoutId() == R.layout.calendar_widget_service)
-                manager.notifyAppWidgetViewDataChanged(id, R.id.widget_event_list);
+            publishList(manager, id, views);
         }
     }
 
@@ -219,7 +217,7 @@ public class CalendarWidgetProvider extends AppWidgetProvider {
 
     private static void renderTodos(Context context, AppWidgetManager manager, int id, LocalDate today,
                                     SharedPreferences p, int background, int accent) {
-        RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.todo_widget);
+        RemoteViews views = CalendarWidgetService.listViews(context, id, WidgetData.TODOS);
         views.setInt(R.id.widget_root, "setBackgroundResource", background);
         views.setTextViewText(R.id.widget_date, today.format(DateTimeFormatter.ofPattern("M月d日 E", Locale.CHINA)));
         views.setTextViewTextSize(R.id.widget_date, TypedValue.COMPLEX_UNIT_SP,
@@ -227,10 +225,6 @@ public class CalendarWidgetProvider extends AppWidgetProvider {
         views.setTextColor(R.id.widget_date, NightMode.foreground(context, 0xff1d2433));
         views.setTextColor(R.id.widget_empty, NightMode.foreground(context, 0xff68736c));
         views.setTextColor(R.id.widget_add, accent);
-        Intent service = new Intent(context, CalendarWidgetService.class).putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                .setData(Uri.parse("chachacalendar://widget-items/todo-2/" + id + "/" + p.getLong("widget_binding_generation", 0)
-                        + "/" + p.getLong("widget_todo_generation_" + id, 0)));
-        views.setRemoteAdapter(R.id.widget_event_list, service);
         views.setEmptyView(R.id.widget_event_list, R.id.widget_empty);
         Intent actions = new Intent(context, WidgetActionReceiver.class).setAction(WidgetActionReceiver.ACTION)
                 .setData(Uri.parse("chachacalendar://widget-actions/" + id))
@@ -246,18 +240,14 @@ public class CalendarWidgetProvider extends AppWidgetProvider {
                         .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP)
                         .setData(Uri.parse("chachacalendar://todos/" + id + "/create")),
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
-        manager.updateAppWidget(id, exactListViews(manager.getAppWidgetOptions(id), views));
-        manager.notifyAppWidgetViewDataChanged(id, R.id.widget_event_list);
+        publishList(manager, id, views);
     }
 
-    private static RemoteViews exactListViews(Bundle options, RemoteViews views) {
-        if (Build.VERSION.SDK_INT < 31) return views;
-        ArrayList<SizeF> sizes = options.getParcelableArrayList(AppWidgetManager.OPTION_APPWIDGET_SIZES);
-        if (sizes == null || sizes.isEmpty()) return views;
-        Map<SizeF, RemoteViews> layouts = new LinkedHashMap<>();
-        for (SizeF size : sizes) if (validSize(size) && layouts.size() < 16)
-            layouts.put(size, new RemoteViews(views));
-        return layouts.isEmpty() ? views : new RemoteViews(layouts);
+    private static void publishList(AppWidgetManager manager, int id, RemoteViews views) {
+        manager.updateAppWidget(id, views);
+        int layout = views.getLayoutId();
+        if (layout == R.layout.calendar_widget_service || layout == R.layout.todo_widget)
+            manager.notifyAppWidgetViewDataChanged(id, R.id.widget_event_list);
     }
 
     private static boolean validSize(SizeF size) {

@@ -29,25 +29,30 @@ public final class CalendarWidgetService extends RemoteViewsService {
         return new EventFactory(getApplicationContext(), intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID));
     }
 
-    static RemoteViews agendaViews(Context context, int widgetId) {
-        RemoteViews views = new RemoteViews(context.getPackageName(), R.layout.calendar_widget_v4);
-        if (bindAgendaItems(context, widgetId, views)) return views;
+    static RemoteViews listViews(Context context, int widgetId, int mode) {
+        boolean todo = mode == WidgetData.TODOS;
+        RemoteViews views = new RemoteViews(context.getPackageName(),
+                todo ? R.layout.todo_widget_collection : R.layout.calendar_widget_v4);
+        if (bindItems(context, widgetId, mode, views)) return views;
         // 两种适配器必须使用不同控件树，否则系统可能保留上次的直接列表而跳过服务重绑。
-        views = new RemoteViews(context.getPackageName(), R.layout.calendar_widget_service);
+        views = new RemoteViews(context.getPackageName(), todo ? R.layout.todo_widget : R.layout.calendar_widget_service);
+        SharedPreferences preferences = CalendarWidgetProvider.settings(context);
         Intent service = new Intent(context, CalendarWidgetService.class)
                 .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
-                .setData(Uri.parse("chachacalendar://widget-items/layout-4/" + widgetId + "/"
-                        + CalendarWidgetProvider.settings(context).getLong("widget_binding_generation", 0L)));
+                .setData(Uri.parse("chachacalendar://widget-items/" + mode + "/" + widgetId + "/"
+                        + preferences.getLong("widget_binding_generation", 0L) + "/"
+                        + preferences.getLong("widget_todo_generation_" + widgetId, 0L) + "/"
+                        + NightMode.isNight(context.getApplicationContext())));
         views.setRemoteAdapter(R.id.widget_event_list, service);
         return views;
     }
 
     /** 小列表随样式一次提交，不先清空组件再等待系统重绑列表服务。 */
     @android.annotation.TargetApi(31)
-    static boolean bindAgendaItems(Context context, int widgetId, RemoteViews views) {
+    private static boolean bindItems(Context context, int widgetId, int mode, RemoteViews views) {
         if (Build.VERSION.SDK_INT < 31) return false;
         EventFactory snapshot = new EventFactory(context, widgetId);
-        if (!snapshot.reload(WidgetData.AGENDA, true)) return false;
+        if (!snapshot.reload(mode, true)) return false;
         // 大列表保留按需服务，不截断事项；同时给 Binder 的其余布局及点击数据留足空间。
         if (snapshot.getCount() > 100) return false;
         RemoteViews.RemoteCollectionItems.Builder builder = new RemoteViews.RemoteCollectionItems.Builder()
