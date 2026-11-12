@@ -1,0 +1,61 @@
+import { Button, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "茶茶日历";
+    preferred-width: 900px;
+    preferred-height: 640px;
+
+    in-out property <string> status-text: "离线可用";
+    callback sync-requested();
+
+    VerticalBox {
+        padding: 16px;
+        spacing: 12px;
+
+        HorizontalBox {
+            spacing: 8px;
+            Text {
+                text: "茶茶日历";
+                font-size: 24px;
+                font-weight: 700;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: root.status-text;
+                vertical-alignment: center;
+            }
+            Button {
+                text: "同步";
+                clicked => { root.sync-requested(); }
+            }
+        }
+
+        Rectangle {
+            border-width: 1px;
+            border-color: #d8dce3;
+            border-radius: 10px;
+            VerticalBox {
+                padding: 16px;
+                spacing: 8px;
+                Text { text: "跨端客户端 MVP"; font-size: 20px; }
+                Text {
+                    text: "本地使用 SQLite/WAL；云端使用 HTTPS WebDAV + ETag 条件请求。同步只在用户触发时启动短线程，空闲时无轮询、无长连接。";
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            border-width: 1px;
+            border-color: #e2e5ea;
+            border-radius: 10px;
+            Text {
+                text: "下一步将在这里复用 Android 的上方可收起月历、下方纪念日/待办长期列表交互。";
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
